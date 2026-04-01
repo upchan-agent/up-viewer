@@ -81,8 +81,8 @@ export function UpProvider({ children }: UpProviderProps) {
           if (devAddress) {
             console.log('[UpProvider] ✅ Dev Mode activated:', devAddress);
             setIsDevMode(true);
-            setAccounts([devAddress]);
-            setContextAccounts([devAddress]);
+            setAccounts([devAddress as `0x${string}`]);
+            setContextAccounts([devAddress as `0x${string}`]);
             setChainId(42);
           }
           return;
@@ -183,8 +183,8 @@ export function UpProvider({ children }: UpProviderProps) {
             if (devAddress) {
               console.log('[UpProvider] ✅ Dev Mode activated:', devAddress);
               setIsDevMode(true);
-              setAccounts([devAddress]);
-              setContextAccounts([devAddress]);
+              setAccounts([devAddress as `0x${string}`]);
+              setContextAccounts([devAddress as `0x${string}`]);
               setChainId(42); // LUKSO mainnet
             } else {
               console.warn('[UpProvider] ❌ No address found for dev mode');
