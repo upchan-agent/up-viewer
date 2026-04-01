@@ -3,6 +3,7 @@
 import { useUpProvider } from '@/lib/up-provider';
 import { useProfile } from '@lsp-indexer/react';
 import { toGatewayUrl } from '@/lib/utils';
+import { useEffect } from 'react';
 
 // Helper to get first image URL from profileImage array
 const getProfileImageUrl = (profile: { profileImage?: { url: string }[] | null } | null): string | undefined => {

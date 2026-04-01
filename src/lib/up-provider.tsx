@@ -50,14 +50,45 @@ export function UpProvider({ children }: UpProviderProps) {
   const [chainId, setChainId] = useState(42);
   const [isMiniApp, setIsMiniApp] = useState<boolean | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [isDevMode, setIsDevMode] = useState(false);
 
   // Initialize provider
   useEffect(() => {
     let pollInterval: ReturnType<typeof setInterval> | null = null;
 
     const initProvider = async () => {
+      console.log('[UpProvider] Initializing...');
       try {
-        // Try Grid provider first
+        // Dev mode check first: skip Grid provider if no extension available
+        const luksoProvider = (window as any).lukso;
+        const urlParams = new URLSearchParams(window.location.search);
+        const urlAddress = urlParams.get('address') as `0x${string}` | null;
+        const envAddress = process.env.NEXT_PUBLIC_DEFAULT_ADDRESS || '';
+        const hasDevAddress = urlAddress || envAddress.startsWith('0x');
+
+        if (!luksoProvider && !hasDevAddress) {
+          console.warn('[UpProvider] No Grid, Extension, or dev address found.');
+          setIsMiniApp(false);
+          return;
+        }
+
+        // Try Grid provider only if we might be in Grid
+        if (!luksoProvider && hasDevAddress) {
+          // Dev mode: skip Grid entirely
+          console.log('[UpProvider] Dev mode detected, skipping Grid provider');
+          setIsMiniApp(false);
+          const devAddress = urlAddress || (envAddress.startsWith('0x') ? envAddress : null);
+          if (devAddress) {
+            console.log('[UpProvider] ✅ Dev Mode activated:', devAddress);
+            setIsDevMode(true);
+            setAccounts([devAddress]);
+            setContextAccounts([devAddress]);
+            setChainId(42);
+          }
+          return;
+        }
+
+        // Grid or Extension mode
         const gridProvider = createClientUPProvider();
 
         // Check if running in Grid with timeout
@@ -67,6 +98,7 @@ export function UpProvider({ children }: UpProviderProps) {
         });
 
         const miniApp = await Promise.race([miniAppPromise, timeoutPromise]);
+        console.log('[UpProvider] isMiniApp:', miniApp);
 
         if (miniApp) {
           // Grid mode: use grid provider
@@ -110,7 +142,7 @@ export function UpProvider({ children }: UpProviderProps) {
             }
           }, 2000);
         } else {
-          // Standalone mode: use window.lukso (browser extension)
+          // Standalone mode: check for window.lukso (browser extension)
           const luksoProvider = (window as any).lukso;
           if (luksoProvider) {
             setProvider(luksoProvider);
@@ -132,13 +164,35 @@ export function UpProvider({ children }: UpProviderProps) {
               setChainId(newChainId);
             });
           } else {
-            // No provider available
+            // Dev mode: try NEXT_PUBLIC_DEFAULT_ADDRESS or ?address= query param
             setIsMiniApp(false);
-            console.warn('No LUKSO provider found. Install UP Browser Extension.');
+            console.log('[UpProvider] No Grid/Extension, trying dev mode...');
+            
+            // Check URL query param first
+            const urlParams = new URLSearchParams(window.location.search);
+            const urlAddress = urlParams.get('address') as `0x${string}` | null;
+            console.log('[UpProvider] URL address param:', urlAddress);
+            
+            // Fallback to env variable
+            const envAddress = process.env.NEXT_PUBLIC_DEFAULT_ADDRESS || '';
+            console.log('[UpProvider] Env NEXT_PUBLIC_DEFAULT_ADDRESS:', envAddress);
+            
+            const devAddress = urlAddress || (envAddress.startsWith('0x') ? envAddress : null);
+            console.log('[UpProvider] Final devAddress:', devAddress);
+            
+            if (devAddress) {
+              console.log('[UpProvider] ✅ Dev Mode activated:', devAddress);
+              setIsDevMode(true);
+              setAccounts([devAddress]);
+              setContextAccounts([devAddress]);
+              setChainId(42); // LUKSO mainnet
+            } else {
+              console.warn('[UpProvider] ❌ No address found for dev mode');
+            }
           }
         }
       } catch (error) {
-        console.error('Failed to initialize UP provider:', error);
+        console.error('[UpProvider] Failed to initialize:', error);
         setIsMiniApp(false);
       }
     };
@@ -179,9 +233,18 @@ export function UpProvider({ children }: UpProviderProps) {
     contextAccounts[0] || accounts[0] || null;
 
   // Connected status
-  const isConnected = isMiniApp 
+  const isConnected = isMiniApp || isDevMode
     ? accounts.length > 0
     : accounts.length > 0;
+
+  console.log('[UpProvider] State:', {
+    accounts,
+    contextAccounts,
+    displayAddress,
+    isMiniApp,
+    isDevMode,
+    isConnected,
+  });
 
   return (
     <UpProviderContext.Provider

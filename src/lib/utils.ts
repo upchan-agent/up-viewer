@@ -6,3 +6,10 @@ export const toGatewayUrl = (url: string | null | undefined): string | undefined
   }
   return url;
 };
+
+// Shorten address for display
+export const shortenAddress = (addr: string, chars = 4): string => {
+  if (!addr) return '';
+  if (addr.length < chars * 2 + 2) return addr;
+  return `${addr.slice(0, chars + 2)}...${addr.slice(-chars)}`;
+};
