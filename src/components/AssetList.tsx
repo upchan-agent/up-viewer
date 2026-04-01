@@ -13,16 +13,7 @@ interface AssetListProps {
 
 // Helper to get first icon URL (from digitalAsset or nft)
 // Priority: nft.images > nft.icons > digitalAsset.images > digitalAsset.icons
-const getIconUrl = (item: { 
-  digitalAsset?: { 
-    icons?: { url: string }[] | null; 
-    images?: { url: string; name?: string }[] | null 
-  } | null; 
-  nft?: { 
-    icons?: { url: string }[] | null; 
-    images?: { url: string; name?: string }[] | null 
-  } | null 
-}): string | undefined => {
+const getIconUrl = (item: any): string | undefined => {
   // 1. Try nft images (larger individual NFT image)
   if (item.nft?.images?.[0]?.url) {
     return toGatewayUrl(item.nft.images[0].url);
