@@ -426,7 +426,7 @@ function AssetDetailPopup({ data, type, onClose, position }: AssetDetailPopupPro
             </div>
             <div style={styles.detailItem}>
               <span style={styles.detailLabel}>Your Balance</span>
-              <span style={styles.detailValue}>{formatBalance(data.balance, da?.decimals ?? null)}</span>
+              <span style={styles.detailValue}>{formatBalance(data.balance ?? null, da?.decimals ?? null)}</span>
             </div>
             {da?.decimals != null && (
               <div style={styles.detailItem}>
