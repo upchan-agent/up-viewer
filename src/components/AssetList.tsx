@@ -311,7 +311,7 @@ export function AssetList({ address }: AssetListProps) {
       {/* Detail Popup */}
       {selectedAsset && selectedAssetData && (
         <AssetDetailPopup
-          data={selectedAssetData}
+          data={selectedAssetData as any}
           type={selectedAsset.type}
           onClose={handleClosePopup}
           position={popupPosition}
