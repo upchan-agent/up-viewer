@@ -752,6 +752,9 @@ const styles: { [key: string]: React.CSSProperties } = {
     color: '#4a5568',
     lineHeight: 1.5,
     margin: 0,
+    wordWrap: 'break-word' as const,
+    overflowWrap: 'break-word' as const,
+    whiteSpace: 'pre-wrap' as const,
   },
   detailGrid: {
     display: 'grid',
@@ -790,6 +793,8 @@ const styles: { [key: string]: React.CSSProperties } = {
     color: '#4a5568',
     textDecoration: 'none',
     transition: 'background 0.15s ease',
+    wordBreak: 'break-all' as const,
+    maxWidth: '100%',
   },
   attributesGrid: {
     display: 'grid',
@@ -804,6 +809,8 @@ const styles: { [key: string]: React.CSSProperties } = {
     display: 'flex',
     flexDirection: 'column',
     gap: '2px',
+    overflow: 'hidden',
+    minWidth: 0,
   },
   attrKey: {
     fontSize: '0.7rem',
@@ -814,6 +821,9 @@ const styles: { [key: string]: React.CSSProperties } = {
     fontSize: '0.85rem',
     fontWeight: '600',
     color: '#2d3748',
+    wordWrap: 'break-word' as const,
+    overflowWrap: 'break-word' as const,
+    overflow: 'hidden',
   },
 };
 
