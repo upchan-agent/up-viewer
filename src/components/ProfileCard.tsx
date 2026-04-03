@@ -3,7 +3,6 @@
 import { useUpProvider } from '@/lib/up-provider';
 import { useProfile } from '@lsp-indexer/react';
 import { toGatewayUrl } from '@/lib/utils';
-import { useEffect } from 'react';
 
 // Helper to get first image URL from profileImage array
 const getProfileImageUrl = (profile: { profileImage?: { url: string }[] | null } | null): string | undefined => {
@@ -14,10 +13,10 @@ const getProfileImageUrl = (profile: { profileImage?: { url: string }[] | null }
 export function ProfileCard() {
   const {
     displayAddress,
-    isConnected,
     isMiniApp,
     isConnecting,
     connect,
+    viewMode,
     accounts,
     provider,
   } = useUpProvider();
@@ -26,7 +25,7 @@ export function ProfileCard() {
     address: displayAddress || '',
   });
 
-  // Switch account handler
+  // Switch account handler (standalone mode only)
   const handleSwitch = async () => {
     if (!provider) return;
     try {
@@ -36,15 +35,16 @@ export function ProfileCard() {
     }
   };
 
-  // Determine connection state
-  const isGridConnected = isMiniApp && accounts.length > 0;
-  const isStandaloneConnected = !isMiniApp && isConnected && accounts.length > 0;
-  const isGridDetecting = isMiniApp === null || (isMiniApp && !isGridConnected);
-  const isConnectedState = isGridConnected || isStandaloneConnected;
-  const isStandaloneDisconnected = !isGridDetecting && !isConnectedState;
-
   // Profile state
   const hasProfile = displayAddress && !isProfileLoading && profile;
+
+  console.log('[ProfileCard] render:', {
+    viewMode,
+    isMiniApp,
+    displayAddress,
+    accounts: accounts.length,
+    hasProfile,
+  });
 
   // Get profile info
   const name = profile?.name || 'Unknown';
@@ -55,22 +55,22 @@ export function ProfileCard() {
     <div style={styles.card}>
       {/* Connection Status Section */}
       <div style={styles.connectionSection}>
-        {/* Grid Detection Skeleton */}
-        {isGridDetecting && (
+        {/* Grid Detecting Skeleton */}
+        {viewMode === 'none' && isMiniApp === null && (
           <div style={styles.skeletonRow}>
             <div style={styles.skeletonIcon} />
             <div style={styles.skeletonText} />
           </div>
         )}
 
-        {/* Connected State */}
-        {isConnectedState && (
-          <div style={{ ...styles.connectedRow, animation: 'contentReveal 0.25s ease' }}>
+        {/* Wallet Connected State */}
+        {viewMode === 'wallet' && (
+          <div style={styles.connectedRow}>
             <span style={styles.connectedIcon}>🟢</span>
             <span style={styles.connectedText}>
               {isMiniApp ? 'Connected via Grid' : 'Connected'}
             </span>
-            {/* Switch button only for standalone mode (not Grid/mobile) */}
+            {/* Switch button only for standalone mode */}
             {!isMiniApp && (
               <button onClick={handleSwitch} style={styles.switchButton}>
                 Switch
@@ -79,9 +79,17 @@ export function ProfileCard() {
           </div>
         )}
 
+        {/* Grid Context State (viewing embedded profile, not yet connected) */}
+        {viewMode === 'grid' && (
+          <div style={styles.viewingRow}>
+            <span style={styles.viewingIcon}>👀</span>
+            <span style={styles.viewingText}>Viewing via Grid</span>
+          </div>
+        )}
+
         {/* Standalone Disconnected */}
-        {isStandaloneDisconnected && (
-          <div style={{ ...styles.disconnectedRow, animation: 'contentReveal 0.25s ease' }}>
+        {viewMode === 'none' && isMiniApp === false && (
+          <div style={styles.disconnectedRow}>
             <span style={styles.disconnectedIcon}>🔌</span>
             <span style={styles.disconnectedText}>No wallet connected</span>
             <button
@@ -99,8 +107,8 @@ export function ProfileCard() {
       </div>
 
       {/* Profile Section */}
-      {!isConnectedState ? (
-        // Not connected: show placeholder
+      {!displayAddress ? (
+        // No address at all: show placeholder
         <div style={styles.placeholderSection}>
           <span style={styles.placeholderIcon}>👤</span>
           <p style={styles.placeholderText}>No profile connected</p>
@@ -112,8 +120,8 @@ export function ProfileCard() {
           <p style={styles.placeholderText}>Loading profile...</p>
         </div>
       ) : (
-        // Profile loaded: show content with fade-in
-        <div style={{ ...styles.profileSection, animation: 'contentReveal 0.25s ease' }}>
+        // Profile loaded: show content
+        <div style={styles.profileSection}>
           {profileImageUrl ? (
             <img src={profileImageUrl} alt={name} style={styles.avatar} />
           ) : (
@@ -136,7 +144,6 @@ const styles: { [key: string]: React.CSSProperties } = {
     borderRadius: '16px',
     boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
   },
-  // Connection Section
   connectionSection: {
     marginBottom: '8px',
     height: '20px',
@@ -193,6 +200,22 @@ const styles: { [key: string]: React.CSSProperties } = {
     cursor: 'pointer',
     flexShrink: 0,
   },
+  viewingRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    minHeight: '20px',
+  },
+  viewingIcon: {
+    fontSize: '0.9rem',
+    flexShrink: 0,
+  },
+  viewingText: {
+    fontSize: '0.75rem',
+    color: '#805ad5',
+    fontWeight: '600',
+    whiteSpace: 'nowrap',
+  },
   disconnectedRow: {
     display: 'flex',
     alignItems: 'center',
@@ -224,14 +247,13 @@ const styles: { [key: string]: React.CSSProperties } = {
     opacity: 0.6,
     cursor: 'not-allowed',
   },
-  // Placeholder Section
   placeholderSection: {
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
     gap: '6px',
-    height: '56px',
+    minHeight: '56px',
   },
   placeholderIcon: {
     fontSize: '1.5rem',
@@ -241,12 +263,11 @@ const styles: { [key: string]: React.CSSProperties } = {
     fontSize: '0.75rem',
     color: '#a0aec0',
   },
-  // Profile Section
   profileSection: {
     display: 'flex',
     alignItems: 'center',
     gap: '12px',
-    height: '56px',
+    minHeight: '56px',
   },
   avatar: {
     width: '56px',

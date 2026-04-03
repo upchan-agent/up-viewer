@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import { createClientUPProvider } from '@lukso/up-provider';
 
 // Define EIP1193Provider type
@@ -24,6 +24,7 @@ interface UpProviderContextType {
   isConnecting: boolean;
   connect: () => Promise<void>;
   displayAddress: `0x${string}` | null;
+  viewMode: 'grid' | 'wallet' | 'none';
 }
 
 const UpProviderContext = createContext<UpProviderContextType | null>(null);
@@ -51,6 +52,17 @@ export function UpProvider({ children }: UpProviderProps) {
   const [isMiniApp, setIsMiniApp] = useState<boolean | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
 
+  // Preserve the initial Grid context address (the UP owner whose page this is)
+  const initialContextAddress = useRef<`0x${string}` | null>(null);
+
+  // Set initial context address helper
+  const setInitialContext = useCallback((ctx: `0x${string}`[]) => {
+    if (ctx.length > 0 && !initialContextAddress.current) {
+      initialContextAddress.current = ctx[0];
+      console.log('[up-provider] Initial context address saved:', ctx[0]);
+    }
+  }, []);
+
   // Initialize provider
   useEffect(() => {
     let pollInterval: ReturnType<typeof setInterval> | null = null;
@@ -68,22 +80,43 @@ export function UpProvider({ children }: UpProviderProps) {
 
         const miniApp = await Promise.race([miniAppPromise, timeoutPromise]);
 
+        console.log('[up-provider] isMiniApp:', miniApp);
+        console.log('[up-provider] gridProvider.contextAccounts (initial):', gridProvider.contextAccounts);
+        console.log('[up-provider] gridProvider.accounts (initial):', gridProvider.accounts);
+
         if (miniApp) {
           // Grid mode: use grid provider
           setProvider(gridProvider as unknown as EIP1193Provider);
           setIsMiniApp(true);
-          setAccounts((gridProvider.accounts || []) as `0x${string}`[]);
-          setContextAccounts((gridProvider.contextAccounts || []) as `0x${string}`[]);
+          
+          const initialCtx = (gridProvider.contextAccounts || []) as `0x${string}`[];
+          const initialAcc = (gridProvider.accounts || []) as `0x${string}`[];
+          
+          // Save initial context address BEFORE setting state (state update is async)
+          setInitialContext(initialCtx);
+          
+          setAccounts(initialAcc);
+          setContextAccounts(initialCtx);
           setChainId(gridProvider.chainId || 42);
+
+          console.log('[up-provider] Grid mode initialized');
+          console.log('[up-provider] contextAccounts state:', initialCtx);
+          console.log('[up-provider] accounts state:', initialAcc);
+          console.log('[up-provider] initialContextAddress:', initialContextAddress.current);
 
           // Listen for changes
           gridProvider.on('accountsChanged', (newAccounts: string[]) => {
+            console.log('[up-provider] accountsChanged:', newAccounts);
             setAccounts(newAccounts as `0x${string}`[]);
-            setContextAccounts((gridProvider.contextAccounts || []) as `0x${string}`[]);
+            const ctx = (gridProvider.contextAccounts || []) as `0x${string}`[];
+            setContextAccounts(ctx);
+            setInitialContext(ctx);
           });
           gridProvider.on('contextAccountsChanged', (newContextAccounts: string[]) => {
+            console.log('[up-provider] contextAccountsChanged:', newContextAccounts);
             setContextAccounts(newContextAccounts as `0x${string}`[]);
             setAccounts((gridProvider.accounts || []) as `0x${string}`[]);
+            setInitialContext(newContextAccounts as `0x${string}`[]);
           });
           gridProvider.on('chainChanged', (newChainId: number) => {
             setChainId(newChainId);
@@ -96,6 +129,11 @@ export function UpProvider({ children }: UpProviderProps) {
               const rpcAccounts = await gridProvider.request({ method: 'eth_accounts' }) as string[];
               const currentAccounts = (rpcAccounts || []) as `0x${string}`[];
               const currentContext = (gridProvider.contextAccounts || []) as `0x${string}`[];
+              
+              // If context accounts appear and we don't have initial yet, save it
+              if (currentContext.length > 0) {
+                setInitialContext(currentContext);
+              }
               
               setAccounts(prev =>
                 prev.length !== currentAccounts.length || prev[0] !== currentAccounts[0]
@@ -148,9 +186,9 @@ export function UpProvider({ children }: UpProviderProps) {
     return () => {
       if (pollInterval) clearInterval(pollInterval);
     };
-  }, []);
+  }, [setInitialContext]);
 
-  // Connect for standalone mode
+  // Connect for standalone mode (or Grid mode: request accounts)
   const connect = useCallback(async () => {
     if (!provider) {
       alert('No wallet found. Please install UP Browser Extension.');
@@ -175,13 +213,28 @@ export function UpProvider({ children }: UpProviderProps) {
   }, [provider]);
 
   // Determine display address
+  // Priority: connected wallet accounts > preserved Grid context > null
   const displayAddress: `0x${string}` | null = 
-    contextAccounts[0] || accounts[0] || null;
+    accounts[0] || initialContextAddress.current || null;
+
+  // View mode
+  const viewMode: 'grid' | 'wallet' | 'none' = 
+    accounts.length > 0
+      ? 'wallet'
+      : (isMiniApp === true && initialContextAddress.current)
+        ? 'grid'
+        : (isMiniApp === null ? 'none' : 'none');
+
+  console.log('[up-provider] render:', {
+    displayAddress,
+    viewMode,
+    isMiniApp,
+    accounts: accounts.length,
+    initialContextAddress: initialContextAddress.current,
+  });
 
   // Connected status
-  const isConnected = isMiniApp 
-    ? accounts.length > 0
-    : accounts.length > 0;
+  const isConnected = accounts.length > 0;
 
   return (
     <UpProviderContext.Provider
@@ -195,6 +248,7 @@ export function UpProvider({ children }: UpProviderProps) {
         isConnecting,
         connect,
         displayAddress,
+        viewMode,
       }}
     >
       {children}
