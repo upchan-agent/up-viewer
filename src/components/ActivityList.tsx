@@ -16,7 +16,7 @@ export function ActivityList({ address: _address }: ActivityListProps) {
       <h3 style={styles.title}>⚡ Activity</h3>
 
       {showPlaceholder ? (
-        <p style={styles.empty}>🔌 Connect your wallet to view activity</p>
+        <p style={styles.empty}>🔌</p>
       ) : (
         <div style={styles.list}>
           <p style={styles.empty}>Coming soon...</p>

@@ -19,6 +19,7 @@ export function ProfileCard() {
     viewMode,
     accounts,
     provider,
+    isDetecting,
   } = useUpProvider();
 
   const { profile, isLoading: isProfileLoading } = useProfile({
@@ -38,14 +39,6 @@ export function ProfileCard() {
   // Profile state
   const hasProfile = displayAddress && !isProfileLoading && profile;
 
-  console.log('[ProfileCard] render:', {
-    viewMode,
-    isMiniApp,
-    displayAddress,
-    accounts: accounts.length,
-    hasProfile,
-  });
-
   // Get profile info
   const name = profile?.name || 'Unknown';
   const initials = name.charAt(0).toUpperCase();
@@ -55,8 +48,8 @@ export function ProfileCard() {
     <div style={styles.card}>
       {/* Connection Status Section */}
       <div style={styles.connectionSection}>
-        {/* Grid Detecting Skeleton */}
-        {viewMode === 'none' && isMiniApp === null && (
+        {/* Initial detection skeleton */}
+        {isDetecting && (
           <div style={styles.skeletonRow}>
             <div style={styles.skeletonIcon} />
             <div style={styles.skeletonText} />
@@ -88,10 +81,10 @@ export function ProfileCard() {
         )}
 
         {/* Standalone Disconnected */}
-        {viewMode === 'none' && isMiniApp === false && (
+        {!isDetecting && viewMode === 'none' && isMiniApp === false && (
           <div style={styles.disconnectedRow}>
             <span style={styles.disconnectedIcon}>🔌</span>
-            <span style={styles.disconnectedText}>No wallet connected</span>
+            <span style={styles.disconnectedText}>Not connected</span>
             <button
               onClick={connect}
               disabled={isConnecting}

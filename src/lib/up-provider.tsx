@@ -20,6 +20,7 @@ interface UpProviderContextType {
   contextAccounts: `0x${string}`[];
   chainId: number;
   isConnected: boolean;
+  isDetecting: boolean; // Still detecting provider type
   isMiniApp: boolean | null;
   isConnecting: boolean;
   connect: () => Promise<void>;
@@ -41,8 +42,8 @@ interface UpProviderProps {
   children: ReactNode;
 }
 
-// Timeout for isMiniApp detection (3 seconds)
-const MINI_APP_TIMEOUT = 3000;
+// Timeout for isMiniApp detection (1 second)
+const MINI_APP_TIMEOUT = 1000;
 
 export function UpProvider({ children }: UpProviderProps) {
   const [provider, setProvider] = useState<EIP1193Provider | null>(null);
@@ -50,6 +51,7 @@ export function UpProvider({ children }: UpProviderProps) {
   const [contextAccounts, setContextAccounts] = useState<`0x${string}`[]>([]);
   const [chainId, setChainId] = useState(42);
   const [isMiniApp, setIsMiniApp] = useState<boolean | null>(null);
+  const [isDetecting, setIsDetecting] = useState(true);
   const [isConnecting, setIsConnecting] = useState(false);
 
   // Preserve the initial Grid context address (the UP owner whose page this is)
@@ -59,7 +61,6 @@ export function UpProvider({ children }: UpProviderProps) {
   const setInitialContext = useCallback((ctx: `0x${string}`[]) => {
     if (ctx.length > 0 && !initialContextAddress.current) {
       initialContextAddress.current = ctx[0];
-      console.log('[up-provider] Initial context address saved:', ctx[0]);
     }
   }, []);
 
@@ -69,10 +70,11 @@ export function UpProvider({ children }: UpProviderProps) {
 
     const initProvider = async () => {
       try {
-        // Try Grid provider first
-        const gridProvider = createClientUPProvider();
+        // Check window.lukso (standalone) immediately — this is synchronous
+        const luksoProvider = (window as any).lukso as EIP1193Provider | undefined;
 
-        // Check if running in Grid with timeout
+        // Try Grid provider in parallel
+        const gridProvider = createClientUPProvider();
         const miniAppPromise = gridProvider.isMiniApp;
         const timeoutPromise = new Promise<boolean>((resolve) => {
           setTimeout(() => resolve(false), MINI_APP_TIMEOUT);
@@ -80,14 +82,11 @@ export function UpProvider({ children }: UpProviderProps) {
 
         const miniApp = await Promise.race([miniAppPromise, timeoutPromise]);
 
-        console.log('[up-provider] isMiniApp:', miniApp);
-        console.log('[up-provider] gridProvider.contextAccounts (initial):', gridProvider.contextAccounts);
-        console.log('[up-provider] gridProvider.accounts (initial):', gridProvider.accounts);
-
         if (miniApp) {
           // Grid mode: use grid provider
           setProvider(gridProvider as unknown as EIP1193Provider);
           setIsMiniApp(true);
+          setIsDetecting(false);
           
           const initialCtx = (gridProvider.contextAccounts || []) as `0x${string}`[];
           const initialAcc = (gridProvider.accounts || []) as `0x${string}`[];
@@ -99,21 +98,14 @@ export function UpProvider({ children }: UpProviderProps) {
           setContextAccounts(initialCtx);
           setChainId(gridProvider.chainId || 42);
 
-          console.log('[up-provider] Grid mode initialized');
-          console.log('[up-provider] contextAccounts state:', initialCtx);
-          console.log('[up-provider] accounts state:', initialAcc);
-          console.log('[up-provider] initialContextAddress:', initialContextAddress.current);
-
           // Listen for changes
           gridProvider.on('accountsChanged', (newAccounts: string[]) => {
-            console.log('[up-provider] accountsChanged:', newAccounts);
             setAccounts(newAccounts as `0x${string}`[]);
             const ctx = (gridProvider.contextAccounts || []) as `0x${string}`[];
             setContextAccounts(ctx);
             setInitialContext(ctx);
           });
           gridProvider.on('contextAccountsChanged', (newContextAccounts: string[]) => {
-            console.log('[up-provider] contextAccountsChanged:', newContextAccounts);
             setContextAccounts(newContextAccounts as `0x${string}`[]);
             setAccounts((gridProvider.accounts || []) as `0x${string}`[]);
             setInitialContext(newContextAccounts as `0x${string}`[]);
@@ -147,37 +139,39 @@ export function UpProvider({ children }: UpProviderProps) {
               // Ignore polling errors
             }
           }, 2000);
-        } else {
+        } else if (luksoProvider) {
           // Standalone mode: use window.lukso (browser extension)
-          const luksoProvider = (window as any).lukso;
-          if (luksoProvider) {
-            setProvider(luksoProvider);
-            setIsMiniApp(false);
-            
-            // Get initial accounts
-            try {
-              const initialAccounts = await luksoProvider.request({ method: 'eth_accounts' });
-              setAccounts((initialAccounts || []) as `0x${string}`[]);
-            } catch (e) {
-              console.log('No initial accounts');
-            }
-
-            // Listen for changes
-            luksoProvider.on('accountsChanged', (newAccounts: string[]) => {
-              setAccounts(newAccounts as `0x${string}`[]);
-            });
-            luksoProvider.on('chainChanged', (newChainId: number) => {
-              setChainId(newChainId);
-            });
-          } else {
-            // No provider available
-            setIsMiniApp(false);
-            console.warn('No LUKSO provider found. Install UP Browser Extension.');
+          setProvider(luksoProvider);
+          setIsMiniApp(false);
+          
+          // Get initial accounts
+          try {
+            const initialAccounts = await luksoProvider.request({ method: 'eth_accounts' });
+            setAccounts((initialAccounts || []) as `0x${string}`[]);
+          } catch (e) {
+            // No accounts yet — user hasn't connected
           }
+          
+          setIsDetecting(false);
+
+          // Listen for changes
+          luksoProvider.on('accountsChanged', (...args) => {
+            const newAccounts = args[0] as string[];
+            setAccounts(newAccounts as `0x${string}`[]);
+          });
+          luksoProvider.on('chainChanged', (...args) => {
+            const newChainId = args[0] as number;
+            setChainId(newChainId);
+          });
+        } else {
+          // No provider available
+          setIsMiniApp(false);
+          setIsDetecting(false);
         }
       } catch (error) {
         console.error('Failed to initialize UP provider:', error);
         setIsMiniApp(false);
+        setIsDetecting(false);
       }
     };
 
@@ -191,7 +185,7 @@ export function UpProvider({ children }: UpProviderProps) {
   // Connect for standalone mode (or Grid mode: request accounts)
   const connect = useCallback(async () => {
     if (!provider) {
-      alert('No wallet found. Please install UP Browser Extension.');
+      alert('Please install the UP Browser Extension.');
       return;
     }
 
@@ -213,7 +207,7 @@ export function UpProvider({ children }: UpProviderProps) {
   }, [provider]);
 
   // Determine display address
-  // Priority: connected wallet accounts > preserved Grid context > null
+// View mode: 'grid' (showing embedded profile), 'wallet' (user connected), 'none' (not connected)
   const displayAddress: `0x${string}` | null = 
     accounts[0] || initialContextAddress.current || null;
 
@@ -223,15 +217,7 @@ export function UpProvider({ children }: UpProviderProps) {
       ? 'wallet'
       : (isMiniApp === true && initialContextAddress.current)
         ? 'grid'
-        : (isMiniApp === null ? 'none' : 'none');
-
-  console.log('[up-provider] render:', {
-    displayAddress,
-    viewMode,
-    isMiniApp,
-    accounts: accounts.length,
-    initialContextAddress: initialContextAddress.current,
-  });
+        : 'none';
 
   // Connected status
   const isConnected = accounts.length > 0;
@@ -244,6 +230,7 @@ export function UpProvider({ children }: UpProviderProps) {
         contextAccounts,
         chainId,
         isConnected,
+        isDetecting,
         isMiniApp,
         isConnecting,
         connect,
