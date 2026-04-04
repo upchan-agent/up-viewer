@@ -444,16 +444,12 @@ function AssetDetailPopup({ data, type, onClose, position, nftDetail, nftLoading
           </div>
         )}
 
-        {/* Image */}
-        {!isToken
-          ? (
-              loadingToken || (nftLoading && !tokenImgUrl)
-                ? <div style={styles.popupImageWrapper}><span style={{ color: '#a0aec0', fontSize: '0.85rem' }}>Loading...</span></div>
-                : mainImageUrl
-                  ? <div style={styles.popupImageWrapper}><img src={mainImageUrl} alt="" style={styles.popupImage} /></div>
-                  : <div style={styles.popupImageWrapper}><span style={{ color: '#a0aec0', fontSize: '0.85rem' }}>No image</span></div>)
-          : (mainImageUrl ? <div style={styles.popupImageWrapper}><img src={mainImageUrl} alt="" style={styles.popupImage} /></div> : null)
-        }
+        {/* Image — always render wrapper to prevent layout shift */}
+        <div style={styles.popupImageWrapper}>
+          {mainImageUrl
+            ? <img src={mainImageUrl} alt="" style={styles.popupImage} />
+            : <span style={{ color: '#a0aec0', fontSize: '0.85rem' }}>🖼️</span>}
+        </div>
         <div style={styles.popupHeader}>
           <h3 style={styles.popupName}>{displayName}</h3>
           <span style={styles.popupSymbol}>{displaySymbol}</span>
@@ -564,7 +560,7 @@ const styles: { [key: string]: React.CSSProperties } = {
   overlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0, 0, 0, 0.3)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(2px)' },
   popup: { background: '#ffffff', borderRadius: '16px', boxShadow: '0 20px 60px rgba(0, 0, 0, 0.15)', maxWidth: '420px', width: '90%', maxHeight: '70vh', overflowY: 'auto', overflowX: 'hidden', position: 'relative', padding: '16px', animation: 'popupIn 0.2s ease', transformOrigin: 'center' },
   closeButton: { position: 'absolute', top: '8px', right: '12px', background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#718096', lineHeight: 1, zIndex: 1 },
-  popupImageWrapper: { width: '100%', maxHeight: '200px', borderRadius: '12px', overflow: 'hidden', marginBottom: '12px', display: 'flex', justifyContent: 'center', alignItems: 'center', background: '#f7fafc' },
+  popupImageWrapper: { width: '100%', height: '200px', borderRadius: '12px', overflow: 'hidden', marginBottom: '12px', display: 'flex', justifyContent: 'center', alignItems: 'center', background: '#f7fafc', flexShrink: 0, position: 'relative' },
   popupImage: { maxWidth: '100%', maxHeight: '200px', objectFit: 'contain' },
   popupHeader: { marginBottom: '8px' },
   popupName: { fontSize: '1.1rem', fontWeight: '700', color: '#1a202c', margin: 0, lineHeight: 1.3 },
