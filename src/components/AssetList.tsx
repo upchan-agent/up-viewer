@@ -13,12 +13,14 @@ interface AssetListProps {
 
 // Helper to get first icon URL (from digitalAsset or nft)
 const getIconUrl = (item: any): string | undefined => {
-  if (item.nft?.images?.[0]?.url) return toGatewayUrl(item.nft.images[0].url);
   if (item.nft?.icons?.[0]?.url) return toGatewayUrl(item.nft.icons[0].url);
+  if (item.nft?.images?.[0]?.url) return toGatewayUrl(item.nft.images[0].url);
+  if (item.digitalAsset?.icons?.[0]?.url) return toGatewayUrl(item.digitalAsset.icons[0].url);
   if (item.digitalAsset?.images?.[0]?.url) return toGatewayUrl(item.digitalAsset.images[0].url);
-  const icons = item.digitalAsset?.icons;
-  if (!icons?.[0]?.url) return undefined;
-  return toGatewayUrl(icons[0].url);
+  // Fallback to digitalAsset.url (IPFS CID for collections where lsp-indexer has empty icons/images)
+  const daUrl = item.digitalAsset?.url;
+  if (daUrl && daUrl.startsWith('ipfs://')) return toGatewayUrl(daUrl);
+  return undefined;
 };
 
 /** Nft.images は2D配列（ZodArray<ZodArray<{url}>>）→ フラット化する */
@@ -94,6 +96,23 @@ async function fetchTokenImage(nftDetail: any): Promise<string | null> {
   return null;
 }
 
+/** Fetch digital asset image from Asset table (fallback for LSP7 tokens) */
+async function fetchAssetImage(daAddress: string): Promise<string | null> {
+  if (!daAddress) return null;
+  const query = `{Asset(where:{id:{_eq:"${daAddress.toLowerCase()}"}},limit:1){icons{url}images{url}url}}`;
+  const res = await fetch(INDEXER_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query }),
+  });
+  const json = await res.json();
+  const assets = json.data?.Asset || [];
+  if (assets.length > 0 && assets[0].images?.[0]?.url) return toGatewayUrl(assets[0].images[0].url) ?? null;
+  if (assets.length > 0 && assets[0].icons?.[0]?.url) return toGatewayUrl(assets[0].icons[0].url) ?? null;
+  if (assets.length > 0 && assets[0].url) return toGatewayUrl(assets[0].url) ?? null;
+  return null;
+}
+
 export function AssetList({ address }: AssetListProps) {
   const { displayAddress } = useUpProvider();
   const targetAddress = address || displayAddress;
@@ -117,7 +136,7 @@ export function AssetList({ address }: AssetListProps) {
     filter: { holderAddress: targetAddress?.toLowerCase() || '' },
     include: { 
       balance: true,
-      digitalAsset: { name: true, symbol: true, tokenType: true, decimals: true, icons: true, description: true, totalSupply: true, holderCount: true, images: true, links: true, attributes: true }
+      digitalAsset: { name: true, symbol: true, tokenType: true, decimals: true, icons: true, description: true, totalSupply: true, holderCount: true, images: true, links: true, attributes: true, url: true }
     },
     pageSize: 500,
   });
@@ -384,14 +403,25 @@ function AssetDetailPopup({ data, type, onClose, position, nftDetail, nftLoading
   const [tokenImgUrl, setTokenImgUrl] = useState<string | null>(null);
   const [loadingToken, setLoadingToken] = useState(false);
 
-  // Async fallback: Token table
+  // Async fallback: NFT → Token table, Token → Asset table
   useEffect(() => {
-    if (isToken || !nftDetail?.address) return;
-    if (resolveNftImageOnlyToken(nftDetail)) return;
-    let cancelled = false;
-    setLoadingToken(true);
-    fetchTokenImage(nftDetail).then(url => { if (!cancelled && url) setTokenImgUrl(url); }).finally(() => { if (!cancelled) setLoadingToken(false); });
-    return () => { cancelled = true; };
+    if (!isToken) {
+      // NFT path: try Token table
+      if (!nftDetail?.address) return;
+      if (resolveNftImageOnlyToken(nftDetail)) return;
+      let cancelled = false;
+      setLoadingToken(true);
+      fetchTokenImage(nftDetail).then(url => { if (!cancelled && url) setTokenImgUrl(url); }).finally(() => { if (!cancelled) setLoadingToken(false); });
+      return () => { cancelled = true; };
+    } else {
+      // Token path: try Asset table
+      if (!data.digitalAssetAddress) return;
+      if (da?.images?.[0]?.url || da?.icons?.[0]?.url) return;
+      let cancelled = false;
+      setLoadingToken(true);
+      fetchAssetImage(data.digitalAssetAddress).then(url => { if (!cancelled && url) setTokenImgUrl(url); }).finally(() => { if (!cancelled) setLoadingToken(false); });
+      return () => { cancelled = true; };
+    }
   }, [isToken, nftDetail, data, da, daImages]);
 
   const mainImageUrl = useMemo(() => {
@@ -400,30 +430,42 @@ function AssetDetailPopup({ data, type, onClose, position, nftDetail, nftLoading
       const sync = resolveNftImageOnlyToken(nftDetail);
       if (sync) return sync;
       if (tokenImgUrl) return tokenImgUrl;
+      // During loading, don't fall back to collection icons (prevents flash)
+      if (loadingToken) return null;
       return resolveNftImageFullFallback(nftDetail, data, da, daImages);
     }
-    if (da?.images?.[0]?.url) return toGatewayUrl(da.images[0].url);
+    // Token: prioritize icons over images (icons = token logo)
     if (da?.icons?.[0]?.url) return toGatewayUrl(da.icons[0].url);
+    if (da?.images?.[0]?.url) return toGatewayUrl(da.images[0].url);
+    if (tokenImgUrl) return tokenImgUrl;
     return null;
   }, [da, nft, nftDetail, isToken, data, nftLoading, daImages, tokenImgUrl, loadingToken]);
 
   // Debug info
   const debugInfo = useMemo(() => {
-    if (isToken) return null;
-    const img1 = nftDetail?.images?.[0];
-    const img1url = Array.isArray(img1) ? img1[0]?.url : img1?.url;
-    const nftImg1 = data?.nft?.images?.[0]?.url;
-    const daImgRaw = daImages as any;
-    const daImg0 = daImgRaw?.[0]?.[0]?.url;
+    if (!isToken) {
+      const img1 = nftDetail?.images?.[0];
+      const img1url = Array.isArray(img1) ? img1[0]?.url : img1?.url;
+      const nftImg1 = data?.nft?.images?.[0]?.url;
+      const daImgRaw = daImages as any;
+      const daImg0 = daImgRaw?.[0]?.[0]?.url;
+      return [
+        `useNft: ${img1url || '(empty)'}`,
+        `nftImg: ${nftImg1 || '(empty)'}`,
+        `baseUri: ${nftDetail?.collection?.baseUri || '(empty)'}`,
+        `daImg:  ${daImg0 || '(empty)'}`,
+        `tokenApi: ${loadingToken ? '...' : (tokenImgUrl || 'no hit')}`,
+        `final:  ${mainImageUrl || '(null)'}`,
+      ].join('\n');
+    }
+    // Token debug
     return [
-      `useNft: ${img1url || '(empty)'}`,
-      `nftImg: ${nftImg1 || '(empty)'}`,
-      `baseUri: ${nftDetail?.collection?.baseUri || '(empty)'}`,
-      `daImg:  ${daImg0 || '(empty)'}`,
-      `tokenApi: ${loadingToken ? '...' : (tokenImgUrl || 'no hit')}`,
-      `final:  ${mainImageUrl || '(null)'}`,
+      `da.images: ${da?.images?.[0]?.url || '(empty)'}`,
+      `da.icons: ${da?.icons?.[0]?.url || '(empty)'}`,
+      `da.url:   ${da?.url || '(empty)'}`,
+      `final:    ${mainImageUrl || '(null)'}`,
     ].join('\n');
-  }, [isToken, nftDetail, data, daImages, mainImageUrl, loadingToken, tokenImgUrl]);
+  }, [isToken, nftDetail, data, daImages, mainImageUrl, loadingToken, tokenImgUrl, da]);
 
   const links = isToken ? da?.links : (nftDetail?.links || nft?.links);
   const attributes = isToken ? da?.attributes : (nftDetail?.attributes || nft?.attributes);
