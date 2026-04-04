@@ -6,10 +6,13 @@ import { SocialGraph } from '@/components/SocialGraph';
 import { AssetList } from '@/components/AssetList';
 import { ActivityList } from '@/components/ActivityList';
 import { useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 
 type TabType = 'assets' | 'social' | 'activity';
 
 function ViewerContent() {
+  const searchParams = useSearchParams();
+  const urlAddress = searchParams.get('address') as `0x${string}` | null;
   const [activeTab, setActiveTab] = useState<TabType>('assets');
 
   return (
@@ -22,7 +25,7 @@ function ViewerContent() {
       </header>
 
       <div style={styles.content}>
-        <ProfileCard />
+        <ProfileCard address={urlAddress || undefined} />
 
         <div style={styles.tabs}>
           <button
@@ -45,7 +48,7 @@ function ViewerContent() {
           </button>
         </div>
 
-        {activeTab === 'assets' && <AssetList />}
+        {activeTab === 'assets' && <AssetList address={urlAddress || undefined} />}
         {activeTab === 'social' && <SocialGraph />}
         {activeTab === 'activity' && <ActivityList />}
       </div>

@@ -2,7 +2,7 @@
 
 import { useUpProvider } from '@/lib/up-provider';
 import { LUKSO_RPC_URL } from '@/lib/constants';
-import { useInfiniteOwnedAssets, useInfiniteOwnedTokens } from '@lsp-indexer/react';
+import { useInfiniteOwnedAssets, useInfiniteOwnedTokens, useNft } from '@lsp-indexer/react';
 import { toGatewayUrl } from '@/lib/utils';
 import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { ethers } from 'ethers';
@@ -21,6 +21,13 @@ const getIconUrl = (item: any): string | undefined => {
   return toGatewayUrl(icons[0].url);
 };
 
+/** Nft.images は2D配列（ZodArray<ZodArray<{url}>>）→ フラット化する */
+const getNftImageUrls = (nft: any): string[] => {
+  if (!nft?.images) return [];
+  const images = Array.isArray(nft.images[0]) ? nft.images.flat() : nft.images;
+  return images.map((img: any) => img.url).filter(Boolean);
+};
+
 const formatBalance = (balance: bigint | null, decimals: number | null | undefined): string => {
   if (!balance) return '0';
   const dec = decimals || 18;
@@ -29,6 +36,63 @@ const formatBalance = (balance: bigint | null, decimals: number | null | undefin
   const frac = Number(balance % divisor) / Number(divisor);
   return (whole + frac).toString();
 };
+
+const INDEXER_URL = 'https://envio.lukso-mainnet.universal.tech/v1/graphql';
+
+/** Synchronous resolution — only checks fields with per-token images */
+function resolveNftImageOnlyToken(nftDetail: any): string | null {
+  if (nftDetail?.images) {
+    const urls = getNftImageUrls(nftDetail);
+    for (const u of urls) {
+      const cid = u.replace('ipfs://', '');
+      if (cid.startsWith('baf') && !cid.includes('.')) continue;
+      return toGatewayUrl(u) ?? null;
+    }
+  }
+  if (nftDetail?.collection?.baseUri) {
+    const baseUri = nftDetail.collection.baseUri as string;
+    if (baseUri.includes('{id}')) {
+      const tokenId = nftDetail.formattedTokenId || nftDetail.tokenId;
+      if (tokenId) return toGatewayUrl(baseUri.replace('{id}', tokenId)) ?? null;
+    }
+  }
+  return null;
+}
+
+/** Full resolution with ALL fallbacks — used as last resort */
+function resolveNftImageFullFallback(nftDetail: any, data?: any, da?: any, daImages?: { url: string }[] | null): string | null {
+  if (nftDetail?.collection?.icons?.[0]?.url) return toGatewayUrl(nftDetail.collection.icons[0].url) ?? null;
+  const daImgRaw = daImages as any;
+  if (daImgRaw?.[0]?.[0]?.url) return toGatewayUrl(daImgRaw[0][0].url) ?? null;
+  if (data?.nft?.icons?.[0]?.url) return toGatewayUrl(data.nft.icons[0].url) ?? null;
+  if (data?.digitalAsset?.icons?.[0]?.url) return toGatewayUrl(data.digitalAsset.icons[0].url) ?? null;
+  if (da?.icons?.[0]?.url) return toGatewayUrl(da.icons[0].url) ?? null;
+  return null;
+}
+
+/** Fetch individual NFT image from Token table (fallback when useNft has no images) */
+async function fetchTokenImage(nftDetail: any): Promise<string | null> {
+  const address = nftDetail?.address;
+  const tokenIdHex = nftDetail?.tokenId?.startsWith('0x')
+    ? nftDetail.tokenId
+    : nftDetail?.formattedTokenId
+      ? '0x' + BigInt(nftDetail.formattedTokenId).toString(16).padStart(64, '0')
+      : null;
+  if (!address || !tokenIdHex) return null;
+
+  const fullId = `${address.toLowerCase()}-${tokenIdHex}`;
+  const query = `{Token(where:{id:{_eq:"${fullId}"}},limit:1){images{url}icons{url}}}`;
+  const res = await fetch(INDEXER_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query }),
+  });
+  const json = await res.json();
+  const tokens = json.data?.Token || [];
+  if (tokens.length > 0 && tokens[0].images?.[0]?.url) return toGatewayUrl(tokens[0].images[0].url) ?? null;
+  if (tokens.length > 0 && tokens[0].icons?.[0]?.url) return toGatewayUrl(tokens[0].icons[0].url) ?? null;
+  return null;
+}
 
 export function AssetList({ address }: AssetListProps) {
   const { displayAddress } = useUpProvider();
@@ -40,7 +104,7 @@ export function AssetList({ address }: AssetListProps) {
   const tokenListRef = useRef<HTMLDivElement>(null);
   const nftListRef = useRef<HTMLDivElement>(null);
 
-  const [selectedAsset, setSelectedAsset] = useState<{ type: 'token' | 'nft'; address: string; tokenId?: string } | null>(null);
+  const [selectedAsset, setSelectedAsset] = useState<{ type: 'token' | 'nft'; address: string; formattedTokenId?: string } | null>(null);
   const [popupPosition, setPopupPosition] = useState<{ top: number; right: number }>({ top: 0, right: 0 });
 
   const {
@@ -94,13 +158,41 @@ export function AssetList({ address }: AssetListProps) {
     if (selectedAsset.type === 'token') {
       return (ownedAssets || []).find(a => a.digitalAssetAddress?.toLowerCase() === selectedAsset.address.toLowerCase());
     }
-    return (ownedTokens || []).find(t => {
-      const tokenIdMatch = selectedAsset.tokenId && (t.tokenId === selectedAsset.tokenId || t.nft?.formattedTokenId === selectedAsset.tokenId);
+    const found = (ownedTokens || []).find(t => {
+      const tokenIdMatch = selectedAsset.formattedTokenId && (t.nft?.formattedTokenId === selectedAsset.formattedTokenId);
       return t.digitalAssetAddress?.toLowerCase() === selectedAsset.address.toLowerCase() && tokenIdMatch;
     });
+    console.log('[selectedAssetData] selected:', JSON.stringify({
+      addr: selectedAsset.address,
+      ftId: selectedAsset.formattedTokenId,
+      foundOwner: found?.nft?.formattedTokenId,
+      ownedCount: ownedTokens?.length,
+    }));
+    return found;
   }, [selectedAsset, ownedAssets, ownedTokens]);
 
-  const handleSelectAsset = useCallback((type: 'token' | 'nft', address: string, tokenId?: string, e?: React.MouseEvent) => {
+  // Fetch individual NFT details using useNft
+  const hasNftParams = selectedAsset?.type === 'nft' && selectedAsset.address && selectedAsset.formattedTokenId;
+  const { nft: nftDetail, isLoading: nftLoading } = useNft(
+    hasNftParams
+      ? {
+          address: selectedAsset!.address.toLowerCase(),
+          formattedTokenId: selectedAsset!.formattedTokenId!,
+          include: {
+            name: true,
+            icons: true,
+            images: true,
+            description: true,
+            links: true,
+            attributes: true,
+            category: true,
+            collection: { baseUri: true, icons: true },
+          },
+        }
+      : ({ address: '', formattedTokenId: '' } as any)
+  );
+
+  const handleSelectAsset = useCallback((type: 'token' | 'nft', address: string, formattedTokenId?: string, e?: React.MouseEvent) => {
     if (e) {
       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
       setPopupPosition({
@@ -108,7 +200,7 @@ export function AssetList({ address }: AssetListProps) {
         right: window.innerWidth - rect.right + window.scrollX,
       });
     }
-    setSelectedAsset({ type, address, tokenId });
+    setSelectedAsset({ type, address, formattedTokenId });
   }, []);
 
   const handleClosePopup = useCallback(() => { setSelectedAsset(null); }, []);
@@ -150,6 +242,7 @@ export function AssetList({ address }: AssetListProps) {
         symbol: item.digitalAsset?.symbol || '???',
         amount: '',
         tokenId: item.nft?.formattedTokenId || item.tokenId,
+        rawTokenId: item.tokenId,
         contractAddress: item.digitalAssetAddress,
         type: 'LSP8' as const,
         iconUrl: getIconUrl(item),
@@ -237,7 +330,14 @@ export function AssetList({ address }: AssetListProps) {
       )}
 
       {selectedAsset && selectedAssetData && (
-        <AssetDetailPopup data={selectedAssetData as any} type={selectedAsset.type} onClose={handleClosePopup} position={popupPosition} />
+        <AssetDetailPopup
+          data={selectedAssetData as any}
+          type={selectedAsset.type}
+          onClose={handleClosePopup}
+          position={popupPosition}
+          nftDetail={nftDetail as any}
+          nftLoading={nftLoading}
+        />
       )}
     </div>
   );
@@ -271,35 +371,94 @@ interface AssetDetailPopupProps {
   type: 'token' | 'nft';
   onClose: () => void;
   position: { top: number; right: number };
+  nftDetail?: any;
+  nftLoading?: boolean;
+  daImages?: { url: string }[] | null;
 }
 
-function AssetDetailPopup({ data, type, onClose, position }: AssetDetailPopupProps) {
+function AssetDetailPopup({ data, type, onClose, position, nftDetail, nftLoading, daImages }: AssetDetailPopupProps) {
   const da = data.digitalAsset;
   const nft = data.nft;
   const isToken = type === 'token';
 
+  const [tokenImgUrl, setTokenImgUrl] = useState<string | null>(null);
+  const [loadingToken, setLoadingToken] = useState(false);
+
+  // Async fallback: Token table
+  useEffect(() => {
+    if (isToken || !nftDetail?.address) return;
+    if (resolveNftImageOnlyToken(nftDetail)) return;
+    let cancelled = false;
+    setLoadingToken(true);
+    fetchTokenImage(nftDetail).then(url => { if (!cancelled && url) setTokenImgUrl(url); }).finally(() => { if (!cancelled) setLoadingToken(false); });
+    return () => { cancelled = true; };
+  }, [isToken, nftDetail, data, da, daImages]);
+
   const mainImageUrl = useMemo(() => {
-    if (nft?.images?.[0]?.url) return toGatewayUrl(nft.images[0].url);
-    if (nft?.icons?.[0]?.url) return toGatewayUrl(nft.icons[0].url);
+    if (nftLoading || loadingToken) return null;
+    if (!isToken) {
+      const sync = resolveNftImageOnlyToken(nftDetail);
+      if (sync) return sync;
+      if (tokenImgUrl) return tokenImgUrl;
+      return resolveNftImageFullFallback(nftDetail, data, da, daImages);
+    }
     if (da?.images?.[0]?.url) return toGatewayUrl(da.images[0].url);
     if (da?.icons?.[0]?.url) return toGatewayUrl(da.icons[0].url);
     return null;
-  }, [da, nft]);
+  }, [da, nft, nftDetail, isToken, data, nftLoading, daImages, tokenImgUrl, loadingToken]);
 
-  const links = isToken ? da?.links : nft?.links;
-  const attributes = isToken ? da?.attributes : nft?.attributes;
+  // Debug info
+  const debugInfo = useMemo(() => {
+    if (isToken) return null;
+    const img1 = nftDetail?.images?.[0];
+    const img1url = Array.isArray(img1) ? img1[0]?.url : img1?.url;
+    const nftImg1 = data?.nft?.images?.[0]?.url;
+    const daImgRaw = daImages as any;
+    const daImg0 = daImgRaw?.[0]?.[0]?.url;
+    return [
+      `useNft: ${img1url || '(empty)'}`,
+      `nftImg: ${nftImg1 || '(empty)'}`,
+      `baseUri: ${nftDetail?.collection?.baseUri || '(empty)'}`,
+      `daImg:  ${daImg0 || '(empty)'}`,
+      `tokenApi: ${loadingToken ? '...' : (tokenImgUrl || 'no hit')}`,
+      `final:  ${mainImageUrl || '(null)'}`,
+    ].join('\n');
+  }, [isToken, nftDetail, data, daImages, mainImageUrl, loadingToken, tokenImgUrl]);
+
+  const links = isToken ? da?.links : (nftDetail?.links || nft?.links);
+  const attributes = isToken ? da?.attributes : (nftDetail?.attributes || nft?.attributes);
   const contractAddress = data.digitalAssetAddress;
+  const displayName = !isToken ? (nftDetail?.name || nft?.name || da?.name || 'Unknown') : (da?.name || 'Unknown');
+  const displaySymbol = !isToken ? `#${nftDetail?.formattedTokenId || nft?.formattedTokenId || data.tokenId || '?'}` : (da?.symbol || '');
+  const displayDescription = !isToken ? (nftDetail?.description || nft?.description) : da?.description;
 
   return (
     <div style={styles.overlay} onClick={onClose}>
       <div style={styles.popup} onClick={(e) => e.stopPropagation()}>
         <button style={styles.closeButton} onClick={onClose}>×</button>
-        {mainImageUrl && <div style={styles.popupImageWrapper}><img src={mainImageUrl} alt="" style={styles.popupImage} /></div>}
+
+        {/* Debug */}
+        {debugInfo && (
+          <div style={{ fontSize: '0.58rem', color: '#e74c3c', marginBottom: '8px', whiteSpace: 'pre-wrap', lineHeight: '1.35', padding: '6px', background: '#fef2f2', borderRadius: '6px', border: '1px solid #fecaca' }}>
+            {debugInfo}
+          </div>
+        )}
+
+        {/* Image */}
+        {!isToken
+          ? (
+              loadingToken || (nftLoading && !tokenImgUrl)
+                ? <div style={styles.popupImageWrapper}><span style={{ color: '#a0aec0', fontSize: '0.85rem' }}>Loading...</span></div>
+                : mainImageUrl
+                  ? <div style={styles.popupImageWrapper}><img src={mainImageUrl} alt="" style={styles.popupImage} /></div>
+                  : <div style={styles.popupImageWrapper}><span style={{ color: '#a0aec0', fontSize: '0.85rem' }}>No image</span></div>)
+          : (mainImageUrl ? <div style={styles.popupImageWrapper}><img src={mainImageUrl} alt="" style={styles.popupImage} /></div> : null)
+        }
         <div style={styles.popupHeader}>
-          <h3 style={styles.popupName}>{isToken ? da?.name || 'Unknown' : nft?.name || da?.name || 'Unknown'}</h3>
-          {isToken ? <span style={styles.popupSymbol}>{da?.symbol}</span> : <span style={styles.popupSymbol}>#{nft?.formattedTokenId || data.tokenId || '?'}</span>}
+          <h3 style={styles.popupName}>{displayName}</h3>
+          <span style={styles.popupSymbol}>{displaySymbol}</span>
         </div>
-        {(isToken ? da?.description : nft?.description) && <p style={styles.popupDescription}>{isToken ? da?.description : nft?.description}</p>}
+        {displayDescription && <p style={styles.popupDescription}>{displayDescription}</p>}
         {isToken && (
           <div style={styles.detailGrid}>
             <div><span style={styles.detailLabel}>Supply</span><span style={styles.detailValue}>{formatBigInt(da?.totalSupply, da?.decimals)}</span></div>
@@ -315,7 +474,7 @@ function AssetDetailPopup({ data, type, onClose, position }: AssetDetailPopupPro
           <div style={{ marginTop: '8px' }}>
             <span style={styles.detailLabel}>Links</span>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '4px' }}>
-              {links.map((link, idx) => (<a key={idx} href={link.url} target="_blank" rel="noopener noreferrer" style={styles.outboundLink}>{link.name || link.url} ↗</a>))}
+              {links.map((link: { name?: string; url: string }, idx: number) => (<a key={idx} href={link.url} target="_blank" rel="noopener noreferrer" style={styles.outboundLink}>{link.name || link.url} ↗</a>))}
             </div>
           </div>
         )}
@@ -323,7 +482,7 @@ function AssetDetailPopup({ data, type, onClose, position }: AssetDetailPopupPro
           <div style={{ marginTop: '8px' }}>
             <span style={styles.detailLabel}>Attributes</span>
             <div style={styles.attributesGrid}>
-              {attributes.slice(0, 12).map((attr, idx) => (<div key={idx} style={styles.attributeItem}>{attr.key && <span style={styles.attrKey}>{attr.key}</span>}<span style={styles.attrValue}>{attr.value}</span></div>))}
+              {attributes.slice(0, 12).map((attr: { key: string; value: string; type?: string }, idx: number) => (<div key={idx} style={styles.attributeItem}>{attr.key && <span style={styles.attrKey}>{attr.key}</span>}<span style={styles.attrValue}>{attr.value}</span></div>))}
             </div>
           </div>
         )}

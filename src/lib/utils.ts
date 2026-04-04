@@ -1,8 +1,21 @@
 // Convert IPFS URL to gateway URL
+// Handles: ipfs://CID, ipfs.io/ipfs/CID, QmCID..., bafk... (CIDv0/v1 direct)
 export const toGatewayUrl = (url: string | null | undefined): string | undefined => {
   if (!url) return undefined;
+  const gateway = 'https://api.universalprofile.cloud/ipfs/';
+  
   if (url.startsWith('ipfs://')) {
-    return `https://api.universalprofile.cloud/ipfs/${url.replace('ipfs://', '')}`;
+    return `${gateway}${url.replace('ipfs://', '')}`;
+  }
+  if (url.startsWith('https://ipfs.io/ipfs/')) {
+    return `${gateway}${url.replace('https://ipfs.io/ipfs/', '')}`;
+  }
+  if (url.startsWith('http://') || url.startsWith('https://')) {
+    return url; // other HTTP URLs are passed through
+  }
+  // CID direct (Qm... or bafk...)
+  if (url.startsWith('Qm') || url.startsWith('baf')) {
+    return `${gateway}${url}`;
   }
   return url;
 };
