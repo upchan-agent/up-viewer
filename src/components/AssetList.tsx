@@ -126,6 +126,11 @@ export function AssetList({ address }: AssetListProps) {
   const [selectedAsset, setSelectedAsset] = useState<{ type: 'token' | 'nft'; address: string; formattedTokenId?: string } | null>(null);
   const [popupPosition, setPopupPosition] = useState<{ top: number; right: number }>({ top: 0, right: 0 });
   const [expandedCollections, setExpandedCollections] = useState<Set<string>>(new Set());
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['lsp8', 'lsp7']));
+
+  const toggleSection = useCallback((key: string) => {
+    setExpandedSections(prev => { const n = new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n; });
+  }, []);
 
   // Cached icons from API fallbacks
   const [iconCache, setIconCache] = useState<Map<string, CachedIcon>>(new Map());
@@ -207,7 +212,7 @@ export function AssetList({ address }: AssetListProps) {
 
   // ─── NFT tree ────────────────────────────────────────────
 
-  const nftTree = useMemo((): NftRenderItem[] => {
+  const { nftTree, lsp7Nfts } = useMemo(() => {
     const addrMap = new Map<string, NftListEntry[]>();
 
     for (const item of (ownedTokens || [])) {
@@ -238,11 +243,13 @@ export function AssetList({ address }: AssetListProps) {
       const collName = collEntry?.digitalAsset?.name || filtered[0].name.replace(/ #\d+$/, '') || filtered[0].name;
       const collIcon = resolveTokenIndexerIcon(collEntry) || undefined;
 
-      if (filtered.length === 1) result.push(filtered[0]);
-      else result.push({ isCollection: true, id: addr, name: collName, symbol: collEntry?.digitalAsset?.symbol || entries[0].symbol, collectionIcon: collIcon, count: filtered.length, children: filtered });
+      // Always treat as collection (even with 1 NFT) for UX consistency
+      result.push({ isCollection: true, id: addr, name: collName, symbol: collEntry?.digitalAsset?.symbol || entries[0].symbol, collectionIcon: collIcon, count: filtered.length, children: filtered });
     }
 
     // LSP7-like NFTs (tokenType NFT/COLLECTION but no ownedTokens entries)
+    // These are single NFT items without tokenId — rendered separately
+    const lsp7Nfts: NftListEntry[] = [];
     const seen = new Set(addrMap.keys());
     for (const asset of (ownedAssets || [])) {
       const type = asset.digitalAsset?.tokenType;
@@ -251,7 +258,7 @@ export function AssetList({ address }: AssetListProps) {
       if (type !== 'NFT' && type !== 'COLLECTION') continue;
       if (searchQuery && !asset.digitalAsset?.name?.toLowerCase().includes(searchQuery.toLowerCase()) && !asset.digitalAsset?.symbol?.toLowerCase().includes(searchQuery.toLowerCase())) continue;
 
-      result.push({
+      lsp7Nfts.push({
         id: asset.digitalAssetAddress, name: asset.digitalAsset?.name || 'Unknown', symbol: asset.digitalAsset?.symbol || '???',
         tokenId: '', rawTokenId: '', contractAddress: asset.digitalAssetAddress,
         indexerIcon: resolveTokenIndexerIcon(asset) || undefined,
@@ -259,7 +266,7 @@ export function AssetList({ address }: AssetListProps) {
       });
     }
 
-    return result.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    return { nftTree: result.sort((a, b) => (a.name || '').localeCompare(b.name || '')), lsp7Nfts };
   }, [ownedTokens, ownedAssets, searchQuery]);
 
   // Track which keys have been fetched or are currently fetching (persists across re-renders)
@@ -337,6 +344,22 @@ export function AssetList({ address }: AssetListProps) {
     // No cleanup — we want fetch results to persist
   }, [tokenItems, nftTree]);
 
+  // Section header component
+  const SectionHeader = ({ label, protocol, count, sectionKey }: { label: string; protocol: string; count: number; sectionKey: string }) => {
+    const isExpanded = expandedSections.has(sectionKey);
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0', cursor: 'pointer', userSelect: 'none' }}
+        onClick={() => toggleSection(sectionKey)}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.opacity = '0.7'; }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.opacity = '1'; }}>
+        <span style={{ ...styles.expandIcon, transform: isExpanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>▶</span>
+        <span style={{ fontSize: '0.75rem', fontWeight: '700', color: '#4a5568', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</span>
+        <span style={{ fontSize: '0.65rem', color: '#a0aec0', fontWeight: '500' }}>{protocol}</span>
+        <span style={{ fontSize: '0.65rem', color: '#cbd5e0', fontWeight: '600', marginLeft: 'auto' }}>{count}</span>
+      </div>
+    );
+  };
+
   // ─── Icon lookup helper ──────────────────────────────────
 
   const getCachedIcon = useCallback((key: string, indexerIcon?: CachedIcon): CachedIcon | undefined => {
@@ -374,55 +397,92 @@ export function AssetList({ address }: AssetListProps) {
     </div>
   );
 
-  const renderNftTree = (tree: NftRenderItem[], _listRef: React.RefObject<HTMLDivElement | null>) => {
-    if (tree.length === 0) return <p style={styles.empty}>No NFTs found</p>;
+  // Auto-expand single-item collections (but don't auto-expand sections)
+  useEffect(() => {
+    setExpandedCollections(prev => {
+      const updated = new Set(prev);
+      for (const item of nftTree) {
+        const isAlreadyIn = updated.has(item.id.toLowerCase());
+        if (isAlreadyIn) continue;
+        const coll = item as NftCollEntry;
+        if (coll.count === 1) updated.add(coll.id.toLowerCase());
+      }
+      return updated;
+    });
+  }, [nftTree]);
+
+  const renderNftTree = (tree: NftRenderItem[], singleNfts: NftListEntry[], _listRef: React.RefObject<HTMLDivElement | null>) => {
+    const hasCollections = tree.length > 0;
+    const hasSingles = singleNfts.length > 0;
+
+    if (!hasCollections && !hasSingles) return <p style={styles.empty}>No NFTs found</p>;
+
+    const collTotal = (tree as NftCollEntry[]).reduce((s, c) => s + c.count, 0);
 
     return (
       <div style={styles.list} ref={_listRef}>
-        {tree.map((item) => {
-          if (isColl(item)) {
-            const isExpanded = expandedCollections.has(item.id.toLowerCase());
-            const cIcon = getCachedIcon(`coll:${item.id.toLowerCase()}`, item.collectionIcon);
-            return (
-              <div key={item.id}>
-                <div style={{ ...styles.item, fontWeight: 600 }} onClick={() => toggleCollection(item.id)}
+        {/* ─── Collection NFTs (LSP8) ─── */}
+        {hasCollections && (
+          <>
+            <SectionHeader label="Collection NFT" protocol="LSP8" count={collTotal} sectionKey="lsp8" />
+            {expandedSections.has('lsp8') && tree.map((item) => {
+              const coll = item as NftCollEntry;
+              const isExpanded = expandedCollections.has(coll.id.toLowerCase());
+              const cIcon = getCachedIcon(`coll:${coll.id.toLowerCase()}`, coll.collectionIcon);
+              return (
+                <div key={coll.id}>
+                  <div style={{ ...styles.item, fontWeight: 600 }} onClick={() => toggleCollection(coll.id)}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#edf2f7'; (e.currentTarget as HTMLElement).style.cursor = 'pointer'; }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = '#f7fafc'; }}>
+                    {renderIcon(cIcon, '📂')}
+                    <div style={styles.itemInfo}><span style={styles.itemName}>{coll.name}</span><span style={styles.itemSymbol}>{coll.count} NFTs</span></div>
+                    <span style={{ ...styles.expandIcon, transform: isExpanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>▶</span>
+                  </div>
+                  {isExpanded && <div style={{ paddingLeft: '8px' }}>
+                    {coll.children.map((child: NftListEntry) => {
+                      const icon = getCachedIcon(`nft:${child.id}`, child.indexerIcon);
+                      return (
+                        <div key={child.id} style={{ ...styles.item, marginLeft: '12px' }}
+                          onClick={(e) => handleSelectAsset('nft', child.contractAddress, child.tokenId, e)}
+                          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#edf2f7'; (e.currentTarget as HTMLElement).style.cursor = 'pointer'; }}
+                          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = '#f7fafc'; }}>
+                          {renderIcon(icon, '🖼️')}
+                          <div style={styles.itemInfo}><span style={styles.itemName}>{child.name}</span><span style={styles.itemSymbol}>{child.tokenId ? `#${shortenId(child.tokenId, 16)}` : `${child.symbol}${child.amount ? ` (${child.amount})` : ''}`}</span></div>
+                          <span style={styles.expandIcon}>›</span>
+                        </div>
+                      );
+                    })}
+                  </div>}
+                </div>
+              );
+            })}
+          </>
+        )}
+
+        {/* ─── Separator ─── */}
+        {hasCollections && hasSingles && (
+          <div style={{ height: '1px', background: '#e2e8f0', margin: '8px 0' }} />
+        )}
+
+        {/* ─── Single NFTs (LSP7) ─── */}
+        {hasSingles && (
+          <>
+            <SectionHeader label="Single NFT" protocol="LSP7" count={singleNfts.length} sectionKey="lsp7" />
+            {expandedSections.has('lsp7') && singleNfts.map((item) => {
+              const icon = getCachedIcon(`coll:${item.id}`, item.indexerIcon);
+              return (
+                <div key={item.id} style={styles.item}
+                  onClick={(e) => handleSelectAsset('nft', item.contractAddress, item.tokenId, e)}
                   onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#edf2f7'; (e.currentTarget as HTMLElement).style.cursor = 'pointer'; }}
                   onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = '#f7fafc'; }}>
-                  {renderIcon(cIcon, '📂')}
-                  <div style={styles.itemInfo}><span style={styles.itemName}>{item.name}</span><span style={styles.itemSymbol}>{item.count} NFTs</span></div>
-                  <span style={{ ...styles.expandIcon, transform: isExpanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>▶</span>
+                  {renderIcon(icon, '🖼️')}
+                  <div style={styles.itemInfo}><span style={styles.itemName}>{item.name}</span><span style={styles.itemSymbol}>{item.symbol}{item.amount ? ` (${item.amount})` : ''}</span></div>
+                  <span style={styles.expandIcon}>›</span>
                 </div>
-                {isExpanded && <div style={{ paddingLeft: '8px' }}>
-                  {item.children.map(child => {
-                    const icon = getCachedIcon(`nft:${child.id}`, child.indexerIcon);
-                    return (
-                      <div key={child.id} style={{ ...styles.item, marginLeft: '12px' }}
-                        onClick={(e) => handleSelectAsset('nft', child.contractAddress, child.tokenId, e)}
-                        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#edf2f7'; (e.currentTarget as HTMLElement).style.cursor = 'pointer'; }}
-                        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = '#f7fafc'; }}>
-                        {renderIcon(icon, '🖼️')}
-                        <div style={styles.itemInfo}><span style={styles.itemName}>{child.name}</span><span style={styles.itemSymbol}>{child.tokenId ? `#${shortenId(child.tokenId, 16)}` : `${child.symbol}${child.amount ? ` (${child.amount})` : ''}`}</span></div>
-                        <span style={styles.expandIcon}>›</span>
-                      </div>
-                    );
-                  })}
-                </div>}
-              </div>
-            );
-          }
-          // Single NFT entry
-          const icon = getCachedIcon(item.tokenId ? `nft:${item.id}` : `coll:${item.id}`, item.indexerIcon);
-          return (
-            <div key={item.id} style={styles.item}
-              onClick={(e) => handleSelectAsset('nft', item.contractAddress, item.tokenId, e)}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#edf2f7'; (e.currentTarget as HTMLElement).style.cursor = 'pointer'; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = '#f7fafc'; }}>
-              {renderIcon(icon, '🖼️')}
-              <div style={styles.itemInfo}><span style={styles.itemName}>{item.name}</span><span style={styles.itemSymbol}>{item.tokenId ? `#${shortenId(item.tokenId, 16)}` : `${item.symbol}${item.amount ? ` (${item.amount})` : ''}`}</span></div>
-              <span style={styles.expandIcon}>›</span>
-            </div>
-          );
-        })}
+              );
+            })}
+          </>
+        )}
       </div>
     );
   };
@@ -571,12 +631,12 @@ export function AssetList({ address }: AssetListProps) {
         <div style={{ animation: 'contentReveal 0.25s ease' }}>
           <div style={styles.tabs}>
             <button style={{ ...styles.tab, ...(activeTab === 'tokens' ? styles.tabActive : {}) }} onClick={() => setActiveTab('tokens')}>🪙 <span style={styles.tabCount}>{tokenItems.length}</span> Tokens</button>
-            <button style={{ ...styles.tab, ...(activeTab === 'nfts' ? styles.tabActive : {}) }} onClick={() => setActiveTab('nfts')}>🖼️ <span style={styles.tabCount}>{nftTree.reduce((s, i) => isColl(i) ? s + i.count : s + 1, 0)}</span> NFTs</button>
+            <button style={{ ...styles.tab, ...(activeTab === 'nfts' ? styles.tabActive : {}) }} onClick={() => setActiveTab('nfts')}>🖼️ <span style={styles.tabCount}>{(nftTree as NftCollEntry[]).reduce((s, i) => s + i.count, 0) + lsp7Nfts.length}</span> NFTs</button>
           </div>
           <input type="text" placeholder={activeTab === 'tokens' ? '🔍 Search tokens...' : '🔍 Search NFTs...'} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} style={styles.searchInput} />
           <div style={{ position: 'relative' }}>
             <div style={{ display: activeTab === 'tokens' ? 'block' : 'none' }}>{renderTokenList(tokenItems, tokenListRef)}</div>
-            <div style={{ display: activeTab === 'nfts' ? 'block' : 'none' }}>{renderNftTree(nftTree, nftListRef)}</div>
+            <div style={{ display: activeTab === 'nfts' ? 'block' : 'none' }}>{renderNftTree(nftTree, lsp7Nfts, nftListRef)}</div>
           </div>
         </div>
       )}
