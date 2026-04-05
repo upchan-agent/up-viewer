@@ -487,19 +487,21 @@ export function AssetList({ address }: AssetListProps) {
     );
   };
 
-  // ─── Popup: useNft for rich data ─────────────────────────
+  // ─── Popup: image resolution by type ─────────────────────
 
-  const isNftPopup = selectedAsset?.type === 'nft';
-  const popupNftAddr = isNftPopup ? selectedAsset?.address : undefined;
-  const popupNftTid = isNftPopup ? selectedAsset?.formattedTokenId : undefined;
+  const isLsp8Popup = selectedAsset?.type === 'nft' && !!selectedAsset?.formattedTokenId;
+  const popupNftAddr = isLsp8Popup ? selectedAsset?.address : undefined;
+  const popupNftTid = isLsp8Popup ? selectedAsset?.formattedTokenId : undefined;
+
+  // useNft — ONLY for LSP8 (disabled for Token/LSP7 via dummy params)
   const { nft: popupNftData, isLoading: popupNftLoading } = useNft(
-    popupNftAddr && popupNftTid
+    isLsp8Popup && popupNftAddr && popupNftTid
       ? { address: popupNftAddr.toLowerCase(), formattedTokenId: popupNftTid,
           include: { name: true, icons: true, images: true, description: true, links: true, attributes: true, category: true, collection: { baseUri: true, icons: true } } }
       : ({ address: '', formattedTokenId: '' } as any)
   );
 
-  // API fallback for popup
+  // API fallback state
   const [popupApiImg, setPopupApiImg] = useState<string | null>(null);
   const [popupApiScheme, setPopupApiScheme] = useState<string | null>(null);
   const [popupApiLoading, setPopupApiLoading] = useState(false);
@@ -514,114 +516,138 @@ export function AssetList({ address }: AssetListProps) {
     }
   }, [popupAssetKey]);
 
+  // API fallback — LSP8 (Token table → Asset table)
   useEffect(() => {
+    if (!isLsp8Popup) return;
     if (popupPrevKey.current !== popupAssetKey) return;
-    if (!selectedAsset) return;
     if (popupNftLoading) return;
 
-    // Check if we already have image from useNft or indexer
-    if ((popupNftData as any)?.images) {
-      const imgs = flattenImages( (popupNftData as any));
-      for (const u of imgs) { if (isUsableIpfs(u)) return; }
-    }
-    if ((popupNftData as any)?.icons?.[0]?.url) return;
-    if ((popupNftData as any)?.collection?.icons?.[0]?.url) return;
+    // Check if useNft already provides an image
+    const da = popupNftData as any;
+    if (da?.images) { const imgs = flattenImages(da); for (const u of imgs) { if (isUsableIpfs(u)) return; } }
+    if (da?.icons?.[0]?.url) return;
+    if (da?.collection?.icons?.[0]?.url) return;
+
+    // Check indexer data
+    if (da?.nft?.icons?.[0]?.url || da?.nft?.images?.[0]?.url) return;
+    if (da?.digitalAsset?.icons?.[0]?.url || da?.digitalAsset?.images?.[0]?.url) return;
+
+    const addr = da?.address || selectedOwnedData?.digitalAssetAddress || '';
+    if (!addr || !popupNftTid) return;
+
+    let cancelled = false;
+    setPopupApiLoading(true);
+    const hex = toTokenIdHex(popupNftTid);
+    (async () => {
+      // Try Token table first
+      const tokenUrl = await fetchTokenImage(addr, hex);
+      if (!cancelled && tokenUrl) { setPopupApiImg(tokenUrl); setPopupApiScheme('api.token.images'); setPopupApiLoading(false); return; }
+      // Then Asset table
+      const assetUrl = await fetchAssetImage(addr);
+      if (!cancelled && assetUrl) setPopupApiImg(assetUrl);
+      if (!cancelled && assetUrl) setPopupApiScheme('api.asset.icons');
+      if (!cancelled) setPopupApiLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [isLsp8Popup, popupNftData, popupNftLoading, popupAssetKey, selectedOwnedData, popupNftTid]);
+
+  // API fallback — Token / LSP7 (Asset table only)
+  useEffect(() => {
+    if (isLsp8Popup) return;
+    if (popupPrevKey.current !== popupAssetKey) return;
+    if (!selectedAsset) return;
 
     const da = selectedOwnedData?.digitalAsset as any;
     if (da?.icons?.[0]?.url || da?.images?.[0]?.url) return;
-    const nftIdx = (selectedOwnedData as any)?.nft;
-    if (nftIdx?.icons?.[0]?.url || nftIdx?.images?.[0]?.url) return;
 
-    const addr = (popupNftData as any)?.address || selectedOwnedData?.digitalAssetAddress || '';
+    const addr = selectedOwnedData?.digitalAssetAddress || '';
     if (!addr) return;
 
     let cancelled = false;
     setPopupApiLoading(true);
-
-    // For NFT popup: resolve image via API as fallback
-    const doFetch = async () => {
-      if (isNftPopup && selectedAsset?.formattedTokenId) {
-        const hex = toTokenIdHex(selectedAsset.formattedTokenId);
-        const url = await fetchTokenImage(addr, hex);
-        if (!cancelled && url) { setPopupApiImg(url); setPopupApiScheme('api.Token'); setPopupApiLoading(false); return; }
-      }
-      // Try asset-level
-      const url = await fetchAssetImage(addr);
-      if (!cancelled && url) { setPopupApiImg(url); setPopupApiScheme('api.Asset'); }
+    fetchAssetImage(addr).then(url => {
+      if (!cancelled && url) { setPopupApiImg(url); setPopupApiScheme('api.asset.icons'); }
       if (!cancelled) setPopupApiLoading(false);
-    };
-    // For token popup
-    if (!isNftPopup) {
-      fetchAssetImage(addr).then(url => {
-        if (!cancelled && url) { setPopupApiImg(url); setPopupApiScheme('api.Asset'); }
-        if (!cancelled) setPopupApiLoading(false);
-      });
-      return () => { cancelled = true; };
-    }
-    doFetch();
+    });
     return () => { cancelled = true; };
-  }, [selectedAsset, popupNftData, popupNftLoading, selectedOwnedData, isNftPopup]);
+  }, [isLsp8Popup, popupAssetKey, selectedAsset, selectedOwnedData]);
 
-  // Resolve final popup image
+  // Resolve final popup image — LSP8 path
   const popupImage = useMemo((): { url: string | null; scheme: string } => {
     if (popupNftLoading || popupApiLoading) return { url: null, scheme: 'loading' };
 
-    // useNft
-    if (isNftPopup &&  (popupNftData as any)) {
-      const imgs = flattenImages(popupNftData as any);
-      for (const u of imgs) { if (isUsableIpfs(u)) return { url: toGatewayUrl(u)!, scheme: 'useNft.images' }; }
-      if ((popupNftData as any)?.icons?.[0]?.url) return { url: toGatewayUrl((popupNftData as any).icons[0].url)!, scheme: 'useNft.icons' };
-      if ((popupNftData as any)?.collection?.icons?.[0]?.url) return { url: toGatewayUrl((popupNftData as any).collection.icons[0].url)!, scheme: 'useNft.collection.icons' };
+    if (isLsp8Popup) {
+      // useNft hook results
+      const da = popupNftData as any;
+      if (da?.images) {
+        const imgs = flattenImages(da);
+        for (const u of imgs) { if (isUsableIpfs(u)) return { url: toGatewayUrl(u)!, scheme: 'useNft.images' }; }
+      }
+      if (da?.icons?.[0]?.url) return { url: toGatewayUrl(da.icons[0].url)!, scheme: 'useNft.icons' };
+      if (da?.collection?.icons?.[0]?.url) return { url: toGatewayUrl(da.collection.icons[0].url)!, scheme: 'useNft.collection.icons' };
+
+      // Indexer data (fallback)
+      const nftIdx = (selectedOwnedData as any)?.nft;
+      if (nftIdx?.icons?.[0]?.url) return { url: toGatewayUrl(nftIdx.icons[0].url)!, scheme: 'ownedToken.nft.icons' };
+      if (nftIdx?.images?.[0]?.url) return { url: toGatewayUrl(nftIdx.images[0].url)!, scheme: 'ownedToken.nft.images' };
+
+      // Also check digitalAsset from ownedTokens (same as above, via different include path)
+      const tokDa = (selectedOwnedData as any)?.digitalAsset;
+      if (tokDa?.icons?.[0]?.url) return { url: toGatewayUrl(tokDa.icons[0].url)!, scheme: 'ownedToken.digitalAsset.icons' };
+      if (tokDa?.images?.[0]?.url) return { url: toGatewayUrl(tokDa.images[0].url)!, scheme: 'ownedToken.digitalAsset.images' };
     }
 
-    // Indexer
+    // Token / LSP7 path — indexer.da only
     const da = selectedOwnedData?.digitalAsset as any;
-    const nftIdx = (selectedOwnedData as any)?.nft;
-    if (nftIdx?.icons?.[0]?.url) return { url: toGatewayUrl(nftIdx.icons[0].url)!, scheme: 'indexer.nft.icons' };
-    if (nftIdx?.images?.[0]?.url) return { url: toGatewayUrl(nftIdx.images[0].url)!, scheme: 'indexer.nft.images' };
-    if (da?.icons?.[0]?.url) return { url: toGatewayUrl(da.icons[0].url)!, scheme: 'indexer.da.icons' };
-    if (da?.images?.[0]?.url) return { url: toGatewayUrl(da.images[0].url)!, scheme: 'indexer.da.images' };
-    if ((da as any)?.url?.startsWith('ipfs://')) return { url: toGatewayUrl((da as any).url)!, scheme: 'indexer.da.url' };
+    if (da?.icons?.[0]?.url) return { url: toGatewayUrl(da.icons[0].url)!, scheme: 'ownedAsset.digitalAsset.icons' };
+    if (da?.images?.[0]?.url) return { url: toGatewayUrl(da.images[0].url)!, scheme: 'ownedAsset.digitalAsset.images' };
+    if (da?.url?.startsWith('ipfs://')) return { url: toGatewayUrl(da.url)!, scheme: 'ownedAsset.digitalAsset.url' };
 
-    // API fallback
+    // API fallback (shared by both paths)
     if (popupApiImg) return { url: popupApiImg, scheme: popupApiScheme || 'api' };
 
     return { url: null, scheme: 'none' };
-  }, [isNftPopup, popupNftData, popupNftLoading, popupApiLoading, popupApiImg, popupApiScheme, selectedOwnedData]);
+  }, [isLsp8Popup, popupNftData, popupNftLoading, popupApiLoading, popupApiImg, popupApiScheme, selectedOwnedData]);
 
-  // Debug
+  // Debug info — type-specific
   const popupDebug = useMemo(() => {
     const p: string[] = [];
-    p.push(`[${isNftPopup ? 'NFT' : 'TOKEN'}] scheme: ${popupImage.scheme}`);
-    if (isNftPopup) {
+    p.push(`[${isLsp8Popup ? 'LSP8' : 'Token/LSP7'}] scheme: ${popupImage.scheme}`);
+
+    if (isLsp8Popup) {
       const img1 = (popupNftData as any)?.images?.[0];
-      p.push(`useNft.img: ${Array.isArray(img1) ? img1[0]?.url : img1?.url || '(empty)'}`);
-      p.push(`useNft.icon: ${(popupNftData as any)?.icons?.[0]?.url || '(empty)'}`);
-      p.push(`useNft.coll.icon: ${(popupNftData as any)?.collection?.icons?.[0]?.url || '(empty)'}`);
+      p.push(`useNft.images: ${Array.isArray(img1) ? img1[0]?.url : img1?.url || '(empty)'}`);
+      p.push(`useNft.icons: ${(popupNftData as any)?.icons?.[0]?.url || '(empty)'}`);
+      p.push(`useNft.collection.icons: ${(popupNftData as any)?.collection?.icons?.[0]?.url || '(empty)'}`);
+      const nftIdx = (selectedOwnedData as any)?.nft;
+      p.push(`ownedToken.nft.icons: ${nftIdx?.icons?.[0]?.url || '(empty)'}`);
+      p.push(`ownedToken.nft.images: ${nftIdx?.images?.[0]?.url || '(empty)'}`);
+      const tokDa = (selectedOwnedData as any)?.digitalAsset;
+      p.push(`ownedToken.digitalAsset.icons: ${tokDa?.icons?.[0]?.url || '(empty)'}`);
+      p.push(`ownedToken.digitalAsset.images: ${tokDa?.images?.[0]?.url || '(empty)'}`);
     }
+
     const da = selectedOwnedData?.digitalAsset as any;
-    const nftIdx = (selectedOwnedData as any)?.nft;
-    p.push(`idx.nft.icon: ${nftIdx?.icons?.[0]?.url || '(empty)'}`);
-    p.push(`idx.nft.img: ${nftIdx?.images?.[0]?.url || '(empty)'}`);
-    p.push(`idx.da.icon: ${da?.icons?.[0]?.url || '(empty)'}`);
-    p.push(`idx.da.img: ${da?.images?.[0]?.url || '(empty)'}`);
+    p.push(`ownedAsset.digitalAsset.icons: ${da?.icons?.[0]?.url || '(empty)'}`);
+    p.push(`ownedAsset.digitalAsset.images: ${da?.images?.[0]?.url || '(empty)'}`);
+    p.push(`ownedAsset.digitalAsset.url: ${da?.url || '(empty)'}`);
     p.push(`api: ${popupApiLoading ? '...' : (popupApiImg || 'no hit')} [${popupApiScheme || '-'}]`);
     p.push(`final: ${popupImage.url || '(null)'}`);
     return p.join('\n');
-  }, [isNftPopup, popupImage, popupNftData, selectedOwnedData, popupApiLoading, popupApiImg, popupApiScheme]);
+  }, [isLsp8Popup, popupImage, popupNftData, selectedOwnedData, popupApiLoading, popupApiImg, popupApiScheme]);
 
   const popupDa = selectedOwnedData?.digitalAsset;
-  const popupDisplayName = isNftPopup
+  const popupDisplayName = isLsp8Popup
     ? ((popupNftData as any)?.name || (selectedOwnedData as any)?.nft?.name || popupDa?.name || 'Unknown')
     : (popupDa?.name || 'Unknown');
-  const popupDisplaySymbol = isNftPopup
+  const popupDisplaySymbol = isLsp8Popup
     ? `#${(popupNftData as any)?.formattedTokenId || (selectedOwnedData as any)?.nft?.formattedTokenId || selectedAsset?.formattedTokenId || '?'}`
     : (popupDa?.symbol || '');
-  const popupDesc = isNftPopup
+  const popupDesc = isLsp8Popup
     ? ((popupNftData as any)?.description || (selectedOwnedData as any)?.nft?.description || popupDa?.description)
     : popupDa?.description;
-  const popupLinks = !isNftPopup ? popupDa?.links : ((popupNftData as any)?.links || (selectedOwnedData as any)?.nft?.links);
-  const popupAttrs = !isNftPopup ? popupDa?.attributes : ((popupNftData as any)?.attributes || (selectedOwnedData as any)?.nft?.attributes);
+  const popupLinks = !isLsp8Popup ? popupDa?.links : ((popupNftData as any)?.links || (selectedOwnedData as any)?.nft?.links);
+  const popupAttrs = !isLsp8Popup ? popupDa?.attributes : ((popupNftData as any)?.attributes || (selectedOwnedData as any)?.nft?.attributes);
 
   return (
     <div style={styles.card}>
@@ -665,7 +691,7 @@ export function AssetList({ address }: AssetListProps) {
               <span style={styles.popupSymbol}>{popupDisplaySymbol}</span>
             </div>
             {popupDesc && <p style={styles.popupDescription}>{popupDesc}</p>}
-            {!isNftPopup && (
+            {!isLsp8Popup && (
               <div style={styles.detailGrid}>
                 <div><span style={styles.detailLabel}>Supply</span><span style={styles.detailValue}>{formatBigInt((popupDa as any)?.totalSupply, (popupDa as any)?.decimals)}</span></div>
                 <div><span style={styles.detailLabel}>Holders</span><span style={styles.detailValue}>{(popupDa as any)?.holderCount?.toLocaleString() || '-'}</span></div>
