@@ -295,7 +295,7 @@ export function AssetList({ address }: AssetListProps) {
       const addr = (item as TokenItem).contractAddress;
       if (!addr) continue;
       const key = `token:${addr.toLowerCase() || item.id}`;
-      addFetch(key, () => fetchAssetImage(addr), 'api.Asset');
+      addFetch(key, () => fetchAssetImage(addr), 'api.asset.icons');
     }
 
     // --- NFT collections and children ---
@@ -304,7 +304,7 @@ export function AssetList({ address }: AssetListProps) {
         // Collection header
         if (!item.collectionIcon) {
           const key = `coll:${item.id.toLowerCase()}`;
-          addFetch(key, () => fetchAssetImage(item.id), 'api.Asset');
+          addFetch(key, () => fetchAssetImage(item.id), 'api.asset.icons');
         }
         // Children
         for (const c of item.children) {
@@ -314,9 +314,9 @@ export function AssetList({ address }: AssetListProps) {
           const tid = c.tokenId;
           if (tid) {
             const hex = toTokenIdHex(tid);
-            addFetch(key, () => fetchTokenImage(addr, hex), 'api.Token');
+            addFetch(key, () => fetchTokenImage(addr, hex), 'api.token.images');
           } else {
-            addFetch(key, () => fetchAssetImage(addr), 'api.Asset');
+            addFetch(key, () => fetchAssetImage(addr), 'api.asset.icons');
           }
         }
       } else if (!item.indexerIcon) {
@@ -324,10 +324,10 @@ export function AssetList({ address }: AssetListProps) {
         if (item.tokenId) {
           const key = `nft:${item.id}`;
           const hex = toTokenIdHex(item.tokenId);
-          addFetch(key, () => fetchTokenImage(item.contractAddress, hex), 'api.Token');
+          addFetch(key, () => fetchTokenImage(item.contractAddress, hex), 'api.token.images');
         } else {
           const key = `coll:${item.id}`;
-          addFetch(key, () => fetchAssetImage(item.contractAddress), 'api.Asset');
+          addFetch(key, () => fetchAssetImage(item.contractAddress), 'api.asset.icons');
         }
       }
     }
