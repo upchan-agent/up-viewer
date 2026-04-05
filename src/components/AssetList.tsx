@@ -262,89 +262,79 @@ export function AssetList({ address }: AssetListProps) {
     return result.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   }, [ownedTokens, ownedAssets, searchQuery]);
 
+  // Track which keys have been fetched or are currently fetching (persists across re-renders)
+  const fetchInFlight = useRef<Set<string>>(new Set());
+
   // ─── Lazy icon loading (API fallback) ────────────────────
 
   useEffect(() => {
-    let cancelled = false;
-    const cacheSet = (key: string, icon: CachedIcon) => {
-      if (!cancelled) setIconCache(prev => { const n = new Map(prev); n.set(key, icon); return n; });
+    // Collect all keys that need fetching
+    const keysToFetch: { key: string; fetchFn: () => Promise<string | null>; scheme: string }[] = [];
+    const seen = new Set<string>();
+
+    // Helper to add a fetch job
+    const addFetch = (key: string, fetchFn: () => Promise<string | null>, scheme: string) => {
+      if (seen.has(key) || fetchInFlight.current.has(key)) return;
+      if (iconCache.has(key)) return;  // already cached
+      seen.add(key);
+      keysToFetch.push({ key, fetchFn, scheme });
+      fetchInFlight.current.add(key);
     };
 
-    // --- Token items: API fallback ---
+    // --- Token items ---
     for (const item of tokenItems) {
       if (item.type === 'LYX') continue;
       if (item.indexerIcon) continue;
-      const key = `token:${(item as TokenItem).contractAddress?.toLowerCase() || item.id}`;
-      if (fetchDone.current.has(key)) continue;
-      fetchDone.current.add(key);
       const addr = (item as TokenItem).contractAddress;
       if (!addr) continue;
-      (async () => {
-        const url = await fetchAssetImage(addr);
-        if (!cancelled && url) cacheSet(key, { url, scheme: 'api.Asset' });
-      })();
+      const key = `token:${addr.toLowerCase() || item.id}`;
+      addFetch(key, () => fetchAssetImage(addr), 'api.Asset');
     }
 
-    // --- NFT collection headers: API fallback ---
+    // --- NFT collections and children ---
     for (const item of nftTree) {
-      if (!isColl(item)) continue;
-      if (!item.collectionIcon) {
-        const key = `coll:${item.id.toLowerCase()}`;
-        if (!fetchDone.current.has(key)) {
-          fetchDone.current.add(key);
-          (async () => {
-            const url = await fetchAssetImage(item.id);
-            if (!cancelled && url) cacheSet(key, { url, scheme: 'api.Asset' });
-          })();
+      if (isColl(item)) {
+        // Collection header
+        if (!item.collectionIcon) {
+          const key = `coll:${item.id.toLowerCase()}`;
+          addFetch(key, () => fetchAssetImage(item.id), 'api.Asset');
         }
-      }
-      // Children: API fallback for individual NFTs
-      for (const c of item.children) {
-        if (c.indexerIcon) continue;
-        const key = `nft:${c.id}`;
-        if (fetchDone.current.has(key)) continue;
-        fetchDone.current.add(key);
-        const addr = c.contractAddress;
-        const tid = c.tokenId;
-        (async () => {
+        // Children
+        for (const c of item.children) {
+          if (c.indexerIcon) continue;
+          const key = `nft:${c.id}`;
+          const addr = c.contractAddress;
+          const tid = c.tokenId;
           if (tid) {
             const hex = toTokenIdHex(tid);
-            const url = await fetchTokenImage(addr, hex);
-            if (!cancelled && url) { cacheSet(key, { url, scheme: 'api.Token' }); return; }
+            addFetch(key, () => fetchTokenImage(addr, hex), 'api.Token');
+          } else {
+            addFetch(key, () => fetchAssetImage(addr), 'api.Asset');
           }
-          const url = await fetchAssetImage(addr);
-          if (!cancelled && url) cacheSet(key, { url, scheme: 'api.Asset' });
-        })();
+        }
+      } else if (!item.indexerIcon) {
+        // Single NFT / LSP7-like
+        if (item.tokenId) {
+          const key = `nft:${item.id}`;
+          const hex = toTokenIdHex(item.tokenId);
+          addFetch(key, () => fetchTokenImage(item.contractAddress, hex), 'api.Token');
+        } else {
+          const key = `coll:${item.id}`;
+          addFetch(key, () => fetchAssetImage(item.contractAddress), 'api.Asset');
+        }
       }
     }
 
-    // --- Single NFT / LSP7-like NFTs ---
-    for (const item of nftTree) {
-      if (isColl(item)) continue;
-      if (item.indexerIcon) continue;
-      if (item.tokenId) {
-        const key = `nft:${item.id}`;
-        if (fetchDone.current.has(key)) continue;
-        fetchDone.current.add(key);
-        const hex = toTokenIdHex(item.tokenId);
-        (async () => {
-          const url = await fetchTokenImage(item.contractAddress, hex);
-          if (!cancelled && url) { cacheSet(key, { url, scheme: 'api.Token' }); return; }
-          const u = await fetchAssetImage(item.contractAddress);
-          if (!cancelled && u) cacheSet(key, { url: u, scheme: 'api.Asset' });
-        })();
-      } else {
-        const key = `coll:${item.id}`;
-        if (fetchDone.current.has(key)) continue;
-        fetchDone.current.add(key);
-        (async () => {
-          const url = await fetchAssetImage(item.contractAddress);
-          if (!cancelled && url) cacheSet(key, { url, scheme: 'api.Asset' });
-        })();
-      }
+    // Execute all fetches (fire-and-forget, results always cached)
+    for (const { key, fetchFn, scheme } of keysToFetch) {
+      fetchFn().then(url => {
+        if (url) {
+          setIconCache(prev => { const n = new Map(prev); n.set(key, { url, scheme }); return n; });
+        }
+      }).catch(() => { /* ignore network errors */ });
     }
 
-    return () => { cancelled = true; };
+    // No cleanup — we want fetch results to persist
   }, [tokenItems, nftTree]);
 
   // ─── Icon lookup helper ──────────────────────────────────
