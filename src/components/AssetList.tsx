@@ -617,10 +617,10 @@ export function AssetList({ address }: AssetListProps) {
             {popupDesc && <p style={styles.popupDescription}>{popupDesc}</p>}
             {!isNftPopup && (
               <div style={styles.detailGrid}>
-                <div><span style={styles.detailLabel}>Supply</span><span style={styles.detailValue}>{formatBigInt(popupDa?.totalSupply, popupDa?.decimals)}</span></div>
-                <div><span style={styles.detailLabel}>Holders</span><span style={styles.detailValue}>{popupDa?.holderCount?.toLocaleString() || '-'}</span></div>
-                <div><span style={styles.detailLabel}>Balance</span><span style={styles.detailValue}>{formatBalance(selectedOwnedData.balance ?? null, popupDa?.decimals ?? null)}</span></div>
-                {popupDa?.decimals != null && <div><span style={styles.detailLabel}>Decimals</span><span style={styles.detailValue}>{popupDa.decimals}</span></div>}
+                <div><span style={styles.detailLabel}>Supply</span><span style={styles.detailValue}>{formatBigInt((popupDa as any)?.totalSupply, (popupDa as any)?.decimals)}</span></div>
+                <div><span style={styles.detailLabel}>Holders</span><span style={styles.detailValue}>{(popupDa as any)?.holderCount?.toLocaleString() || '-'}</span></div>
+                <div><span style={styles.detailLabel}>Balance</span><span style={styles.detailValue}>{formatBalance((selectedOwnedData as any)?.balance ?? null, (popupDa as any)?.decimals ?? null)}</span></div>
+                {(popupDa as any)?.decimals != null && <div><span style={styles.detailLabel}>Decimals</span><span style={styles.detailValue}>{(popupDa as any).decimals}</span></div>}
               </div>
             )}
             {selectedOwnedData.digitalAssetAddress && (
