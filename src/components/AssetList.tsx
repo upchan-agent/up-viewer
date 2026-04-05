@@ -470,19 +470,19 @@ export function AssetList({ address }: AssetListProps) {
     if (popupNftLoading) return;
 
     // Check if we already have image from useNft or indexer
-    if (popupNftData?.images) {
-      const imgs = flattenImages(popupNftData);
+    if ((popupNftData as any)?.images) {
+      const imgs = flattenImages( (popupNftData as any));
       for (const u of imgs) { if (isUsableIpfs(u)) return; }
     }
-    if (popupNftData?.icons?.[0]?.url) return;
-    if (popupNftData?.collection?.icons?.[0]?.url) return;
+    if ((popupNftData as any)?.icons?.[0]?.url) return;
+    if ((popupNftData as any)?.collection?.icons?.[0]?.url) return;
 
     const da = selectedOwnedData?.digitalAsset;
     if (da?.icons?.[0]?.url || da?.images?.[0]?.url) return;
     const nftIdx = (selectedOwnedData as any)?.nft;
     if (nftIdx?.icons?.[0]?.url || nftIdx?.images?.[0]?.url) return;
 
-    const addr = popupNftData?.address || selectedOwnedData?.digitalAssetAddress || '';
+    const addr = (popupNftData as any)?.address || selectedOwnedData?.digitalAssetAddress || '';
     if (!addr) return;
 
     let cancelled = false;
@@ -517,11 +517,11 @@ export function AssetList({ address }: AssetListProps) {
     if (popupNftLoading || popupApiLoading) return { url: null, scheme: 'loading' };
 
     // useNft
-    if (isNftPopup && popupNftData) {
-      const imgs = flattenImages(popupNftData);
+    if (isNftPopup &&  (popupNftData as any)) {
+      const imgs = flattenImages(popupNftData as any);
       for (const u of imgs) { if (isUsableIpfs(u)) return { url: toGatewayUrl(u)!, scheme: 'useNft.images' }; }
-      if (popupNftData.icons?.[0]?.url) return { url: toGatewayUrl(popupNftData.icons[0].url)!, scheme: 'useNft.icons' };
-      if (popupNftData.collection?.icons?.[0]?.url) return { url: toGatewayUrl(popupNftData.collection.icons[0].url)!, scheme: 'useNft.collection.icons' };
+      if ((popupNftData as any)?.icons?.[0]?.url) return { url: toGatewayUrl((popupNftData as any).icons[0].url)!, scheme: 'useNft.icons' };
+      if ((popupNftData as any)?.collection?.icons?.[0]?.url) return { url: toGatewayUrl((popupNftData as any).collection.icons[0].url)!, scheme: 'useNft.collection.icons' };
     }
 
     // Indexer
@@ -544,10 +544,10 @@ export function AssetList({ address }: AssetListProps) {
     const p: string[] = [];
     p.push(`[${isNftPopup ? 'NFT' : 'TOKEN'}] scheme: ${popupImage.scheme}`);
     if (isNftPopup) {
-      const img1 = popupNftData?.images?.[0];
+      const img1 = (popupNftData as any)?.images?.[0];
       p.push(`useNft.img: ${Array.isArray(img1) ? img1[0]?.url : img1?.url || '(empty)'}`);
-      p.push(`useNft.icon: ${popupNftData?.icons?.[0]?.url || '(empty)'}`);
-      p.push(`useNft.coll.icon: ${popupNftData?.collection?.icons?.[0]?.url || '(empty)'}`);
+      p.push(`useNft.icon: ${(popupNftData as any)?.icons?.[0]?.url || '(empty)'}`);
+      p.push(`useNft.coll.icon: ${(popupNftData as any)?.collection?.icons?.[0]?.url || '(empty)'}`);
     }
     const da = selectedOwnedData?.digitalAsset;
     const nftIdx = (selectedOwnedData as any)?.nft;
@@ -562,16 +562,16 @@ export function AssetList({ address }: AssetListProps) {
 
   const popupDa = selectedOwnedData?.digitalAsset;
   const popupDisplayName = isNftPopup
-    ? (popupNftData?.name || (selectedOwnedData as any)?.nft?.name || popupDa?.name || 'Unknown')
+    ? ((popupNftData as any)?.name || (selectedOwnedData as any)?.nft?.name || popupDa?.name || 'Unknown')
     : (popupDa?.name || 'Unknown');
   const popupDisplaySymbol = isNftPopup
-    ? `#${popupNftData?.formattedTokenId || (selectedOwnedData as any)?.nft?.formattedTokenId || selectedAsset?.formattedTokenId || '?'}`
+    ? `#${(popupNftData as any)?.formattedTokenId || (selectedOwnedData as any)?.nft?.formattedTokenId || selectedAsset?.formattedTokenId || '?'}`
     : (popupDa?.symbol || '');
   const popupDesc = isNftPopup
-    ? (popupNftData?.description || (selectedOwnedData as any)?.nft?.description || popupDa?.description)
+    ? ((popupNftData as any)?.description || (selectedOwnedData as any)?.nft?.description || popupDa?.description)
     : popupDa?.description;
-  const popupLinks = !isNftPopup ? popupDa?.links : (popupNftData?.links || (selectedOwnedData as any)?.nft?.links);
-  const popupAttrs = !isNftPopup ? popupDa?.attributes : (popupNftData?.attributes || (selectedOwnedData as any)?.nft?.attributes);
+  const popupLinks = !isNftPopup ? popupDa?.links : ((popupNftData as any)?.links || (selectedOwnedData as any)?.nft?.links);
+  const popupAttrs = !isNftPopup ? popupDa?.attributes : ((popupNftData as any)?.attributes || (selectedOwnedData as any)?.nft?.attributes);
 
   return (
     <div style={styles.card}>
