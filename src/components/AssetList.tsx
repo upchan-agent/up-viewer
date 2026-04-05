@@ -477,7 +477,7 @@ export function AssetList({ address }: AssetListProps) {
     if ((popupNftData as any)?.icons?.[0]?.url) return;
     if ((popupNftData as any)?.collection?.icons?.[0]?.url) return;
 
-    const da = selectedOwnedData?.digitalAsset;
+    const da = selectedOwnedData?.digitalAsset as any;
     if (da?.icons?.[0]?.url || da?.images?.[0]?.url) return;
     const nftIdx = (selectedOwnedData as any)?.nft;
     if (nftIdx?.icons?.[0]?.url || nftIdx?.images?.[0]?.url) return;
@@ -525,7 +525,7 @@ export function AssetList({ address }: AssetListProps) {
     }
 
     // Indexer
-    const da = selectedOwnedData?.digitalAsset;
+    const da = selectedOwnedData?.digitalAsset as any;
     const nftIdx = (selectedOwnedData as any)?.nft;
     if (nftIdx?.icons?.[0]?.url) return { url: toGatewayUrl(nftIdx.icons[0].url)!, scheme: 'indexer.nft.icons' };
     if (nftIdx?.images?.[0]?.url) return { url: toGatewayUrl(nftIdx.images[0].url)!, scheme: 'indexer.nft.images' };
@@ -549,7 +549,7 @@ export function AssetList({ address }: AssetListProps) {
       p.push(`useNft.icon: ${(popupNftData as any)?.icons?.[0]?.url || '(empty)'}`);
       p.push(`useNft.coll.icon: ${(popupNftData as any)?.collection?.icons?.[0]?.url || '(empty)'}`);
     }
-    const da = selectedOwnedData?.digitalAsset;
+    const da = selectedOwnedData?.digitalAsset as any;
     const nftIdx = (selectedOwnedData as any)?.nft;
     p.push(`idx.nft.icon: ${nftIdx?.icons?.[0]?.url || '(empty)'}`);
     p.push(`idx.nft.img: ${nftIdx?.images?.[0]?.url || '(empty)'}`);
