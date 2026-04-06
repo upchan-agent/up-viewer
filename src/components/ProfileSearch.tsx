@@ -45,69 +45,73 @@ export function ProfileSearch({ onSelect, onCancel }: ProfileSearchProps) {
   const [results, setResults] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
-  const debouncedRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const handleSearch = useCallback(
-    async (searchQuery: string, force: boolean = false) => {
-      if (searchQuery.length < 3) {
-        setResults([]);
-        setShowDropdown(false);
-        return;
-      }
+  const doSearch = useCallback(async (searchQuery: string) => {
+    if (searchQuery.length < 3) {
+      setResults([]);
+      setShowDropdown(false);
+      return;
+    }
 
-      // Auto-search on exactly 3 chars, or on Enter (force)
-      if (searchQuery.length > 3 && !force) return;
+    setLoading(true);
+    try {
+      const res = await fetch(ENVIO_MAINNET_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: GQL_QUERY, variables: { id: searchQuery.toLowerCase() } }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      const data: Profile[] = json.data?.search_profiles ?? [];
+      setResults(data);
+      setShowDropdown(data.length > 0);
+    } catch {
+      setResults([]);
+      setShowDropdown(false);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-      setLoading(true);
-      try {
-        const res = await fetch(ENVIO_MAINNET_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query: GQL_QUERY, variables: { id: searchQuery.toLowerCase() } }),
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const json = await res.json();
-        const data: Profile[] = json.data?.search_profiles ?? [];
-        setResults(data);
-        setShowDropdown(data.length > 0);
-      } catch {
-        setResults([]);
-        setShowDropdown(false);
-      } finally {
-        setLoading(false);
-      }
-    },
-    []
-  );
-
-  // Debounced search for >3 chars (manual trigger on Enter)
   const handleInputChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const val = e.target.value;
       setQuery(val);
 
-      if (debouncedRef.current) clearTimeout(debouncedRef.current);
-      if (val.length > 3) {
-        // Don't auto-search >3 chars, user must press Enter
-        setShowDropdown(false);
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+
+      if (val.length < 3) {
         setResults([]);
+        setShowDropdown(false);
+        return;
+      }
+
+      // Check if it looks like an address (0x + hex)
+      const looksLikeAddress = /^0x[0-9a-f]{5,}/i.test(val);
+
+      if (looksLikeAddress) {
+        // Address paste — wait a bit for the full paste, then search immediately
+        debounceRef.current = setTimeout(() => doSearch(val), 400);
       } else if (val.length === 3) {
-        handleSearch(val);
+        // Exactly 3 chars — auto search immediately
+        doSearch(val);
       } else {
-        setResults([]);
-        setShowDropdown(false);
+        // >3 chars, not an address — debounce 800ms then search
+        debounceRef.current = setTimeout(() => doSearch(val), 800);
       }
     },
-    [handleSearch]
+    [doSearch]
   );
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
       if (e.key === 'Enter') {
-        handleSearch(query, true);
+        if (debounceRef.current) clearTimeout(debounceRef.current);
+        doSearch(query);
       }
     },
-    [handleSearch, query]
+    [doSearch, query]
   );
 
   const handleSelect = useCallback(
@@ -117,21 +121,22 @@ export function ProfileSearch({ onSelect, onCancel }: ProfileSearchProps) {
     [onSelect]
   );
 
-  // Close dropdown when clicking outside
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
-      if (!target.closest('[data-search-root]')) {
-        setShowDropdown(false);
-      }
+      if (!target.closest('[data-search-root]')) setShowDropdown(false);
     };
     document.addEventListener('click', handler);
     return () => document.removeEventListener('click', handler);
   }, []);
 
+  // Cleanup debounce on unmount
+  useEffect(() => {
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  }, []);
+
   return (
     <div data-search-root style={styles.root}>
-      {/* Search Input */}
       <div style={styles.inputRow}>
         <input
           type="text"
@@ -148,7 +153,6 @@ export function ProfileSearch({ onSelect, onCancel }: ProfileSearchProps) {
         </button>
       </div>
 
-      {/* Results Dropdown */}
       {showDropdown && results.length > 0 && (
         <div style={styles.dropdown}>
           {results.map((r) => (
@@ -161,13 +165,9 @@ export function ProfileSearch({ onSelect, onCancel }: ProfileSearchProps) {
                 )}
               </div>
               <div style={styles.resultInfo}>
-                {r.fullName && (
-                  <div style={styles.resultName}>{r.fullName}</div>
-                )}
+                {r.fullName && <div style={styles.resultName}>{r.fullName}</div>}
                 {r.name && <div style={styles.resultUpName}>{r.name}</div>}
-                <div style={styles.resultAddress}>
-                  {r.id.slice(0, 6)}...{r.id.slice(-4)}
-                </div>
+                <div style={styles.resultAddress}>{r.id.slice(0, 6)}...{r.id.slice(-4)}</div>
               </div>
             </button>
           ))}
@@ -182,7 +182,7 @@ export function ProfileSearch({ onSelect, onCancel }: ProfileSearchProps) {
 const styles: Record<string, React.CSSProperties> = {
   root: {
     position: 'relative',
-    marginBottom: '8px',
+    // No marginBottom — container gap handles it
   },
   inputRow: {
     display: 'flex',
@@ -196,7 +196,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '14px',
     outline: 'none',
     background: '#fff',
-    transition: 'border-color 0.15s',
   },
   cancelButton: {
     padding: '8px 12px',
@@ -209,6 +208,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
+    flexShrink: 0,
   },
   dropdown: {
     position: 'absolute',
@@ -234,7 +234,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderBottom: '1px solid #f7fafc',
     background: '#fff',
     cursor: 'pointer',
-    textAlign: 'left' as const,
+    textAlign: 'left',
     transition: 'background 0.1s',
   },
   resultAvatar: {

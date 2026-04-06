@@ -70,13 +70,10 @@ function ViewerInner() {
         />
 
         {showSearch && (
-          <div style={{ paddingBottom: '4px' }}>
-            {/* Dynamic import to avoid SSR issues */}
-            <DynamicProfileSearch
-              onSelect={handleSelectAddress}
-              onCancel={() => setShowSearch(false)}
-            />
-          </div>
+          <DynamicProfileSearch
+            onSelect={handleSelectAddress}
+            onCancel={() => setShowSearch(false)}
+          />
         )}
 
         <div style={styles.tabs}>
