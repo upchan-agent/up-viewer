@@ -46,6 +46,25 @@ const toTokenIdHex = (tid: string): string => {
 
 const INDEXER_URL = 'https://envio.lukso-mainnet.universal.tech/v1/graphql';
 
+// ─── Rate limiter: max 3 concurrent fetches to stay under Envio's limit ─
+let _activeFetches = 0;
+const _fetchQueue: { fn: () => Promise<string | null>; resolve: (v: string | null) => void; reject: () => void }[] = [];
+
+function _drainQueue() {
+  while (_activeFetches < 3 && _fetchQueue.length > 0) {
+    _activeFetches++;
+    const { fn, resolve, reject } = _fetchQueue.shift()!;
+    fn().then(resolve).catch(reject).finally(() => { _activeFetches--; _drainQueue(); });
+  }
+}
+
+function fetchWithLimit(fn: () => Promise<string | null>): Promise<string | null> {
+  return new Promise((resolve, reject) => {
+    _fetchQueue.push({ fn, resolve, reject });
+    _drainQueue();
+  });
+}
+
 async function fetchAssetImage(addr: string): Promise<string | null> {
   const query = `{Asset(where:{id:{_eq:"${addr.toLowerCase()}"}},limit:1){icons{url}images{url}url}}`;
   const res = await fetch(INDEXER_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query }) });
@@ -141,13 +160,19 @@ function NftChildItem({ entry, collFallback, onClick, renderIcon, styles, shorte
     if (da?.icons?.[0]?.url) return;
 
     // Fallback to Token table (may have images even when useNft doesn't)
+    // Uses rate limiter to avoid Envio GraphQL overload
     let cancelled = false;
     setChildApiLoading(true);
     const hex = toTokenIdHex(entry.tokenId);
-    fetchTokenImage(entry.contractAddress, hex).then(url => {
+
+    fetchWithLimit(() => fetchTokenImage(entry.contractAddress, hex)).then(url => {
       if (!cancelled && url) setChildApiImg(url);
       if (!cancelled) setChildApiLoading(false);
+    }).catch(() => {
+      // Silent fail — useNft fallback will handle it
+      if (!cancelled) setChildApiLoading(false);
     });
+
     return () => { cancelled = true; };
   }, [nftData, nftLoading, entry.contractAddress, entry.tokenId]);
 
@@ -615,23 +640,27 @@ export function AssetList({ address }: AssetListProps) {
     if (popupNftLoading) return { url: null, scheme: 'loading' };
     if (isLsp8Popup) {
       const da = popupNftData as any;
-      // 1st: useNft.images (no isUsableIpfs filter — trust useNft)
+      // 1st: useNft.images (available immediately from useNft hook)
       if (da?.images) {
         const imgs = flattenImages(da);
         if (imgs.length > 0) return { url: toGatewayUrl(imgs[0])!, scheme: 'useNft.images' };
       }
-      // useNft.images empty → must do API fallback
-      // If API hasn't finished yet (loading or not started), show loading to prevent icon flash
-      if (!popupApiLoading && !popupApiDone.current) return { url: null, scheme: 'loading' };
-      // 2nd: API fallback — Token table (individual image)
+
+      // FIXED: Check if asset key changed (useEffect hasn't reset popupApiDone yet!)
+      const isNewAsset = popupPrevKey.current !== popupAssetKey;
+      const apiDone = isNewAsset ? false : popupApiDone.current;
+
+      // useNft.images unavailable → need API fallback
+      // While API hasn't completed, show loading to prevent 🖼️ flicker
+      if (!apiDone) return { url: null, scheme: 'loading' };
+
+      // API completed — check if it found an image
       if (popupApiImg && popupApiScheme === 'api.token.images') return { url: popupApiImg, scheme: popupApiScheme };
-      // 3rd: useNft.icons
-      if (da?.icons?.[0]?.url) return { url: toGatewayUrl(da.icons[0].url)!, scheme: 'useNft.icons' };
-      // 4th: useNft.collection.icons
-      if (da?.collection?.icons?.[0]?.url) return { url: toGatewayUrl(da.collection.icons[0].url)!, scheme: 'useNft.collection.icons' };
-      // 5th: API fallback — Asset table (collection image)
       if (popupApiImg && popupApiScheme === 'api.asset.icons') return { url: popupApiImg, scheme: popupApiScheme };
-      // 6th: ownedToken indexer data
+
+      // API returned nothing → fallback to icons (these are from useNft, safe to show)
+      if (da?.icons?.[0]?.url) return { url: toGatewayUrl(da.icons[0].url)!, scheme: 'useNft.icons' };
+      if (da?.collection?.icons?.[0]?.url) return { url: toGatewayUrl(da.collection.icons[0].url)!, scheme: 'useNft.collection.icons' };
       const nftIdx = (selectedOwnedData as any)?.nft;
       if (nftIdx?.icons?.[0]?.url) return { url: toGatewayUrl(nftIdx.icons[0].url)!, scheme: 'ownedToken.nft.icons' };
       if (nftIdx?.images?.[0]?.url) return { url: toGatewayUrl(nftIdx.images[0].url)!, scheme: 'ownedToken.nft.images' };
@@ -665,6 +694,7 @@ export function AssetList({ address }: AssetListProps) {
       // 2nd: api.token.images
       if (popupApiScheme === 'api.token.images' && popupApiImg) reasons.push(`2nd: api.token.images ✓\n${popupApiImg}`);
       else if (popupApiLoading) reasons.push(`2nd: api.token.images (loading)`);
+      else reasons.push(`2nd: api.token.images (not fetched)`);
 
       // 3rd: useNft.icons
       const nIconUrl = da?.icons?.[0]?.url;
@@ -688,9 +718,13 @@ export function AssetList({ address }: AssetListProps) {
       else reasons.push(`6th: ownedToken.nft (empty)`);
 
       p.push(reasons.join('\n'));
-      const sel = reasons.find(r => r.includes('✓'));
-      if (sel) p.push(`\n→ using: ${sel.split(':')[1]?.trim().replace(' ✓', '')}`);
-      else p.push(`\n→ no image found, showing 🖼️`);
+      if (scheme === 'loading') p.push(`\n→ waiting for API response… (⌛️ shown)`);
+      else if (scheme === 'none') p.push(`\n→ no image found, showing 🖼️`);
+      else {
+        const sel = reasons.find(r => r.includes('✓'));
+        if (sel) p.push(`\n→ using: ${sel.split(':')[1]?.trim().replace(' ✓', '')}`);
+        else p.push(`\n→ no image found, showing 🖼️`);
+      }
     } else {
       p.push(`[Token/LSP7] selected: ${scheme}`);
       const da = selectedOwnedData?.digitalAsset as any;
@@ -745,7 +779,7 @@ export function AssetList({ address }: AssetListProps) {
               <details style={debugStyles.details}><summary style={debugStyles.summary}>🔍 Debug: Image Resolution</summary><div style={debugStyles.content}>{popupDebug}</div></details>
             </div>
             <div style={styles.popupImageWrapper}>
-              {(popupNftLoading || popupApiLoading) ? <span style={{ color: '#a0aec0', fontSize: '0.85rem' }}>⏳ Loading...</span>
+              {popupImage.scheme === 'loading' ? <span style={{ color: '#a0aec0', fontSize: '0.85rem' }}>⏳ Loading...</span>
               : popupImage.url ? <img src={popupImage.url} alt="" style={styles.popupImage} onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
               : <span style={{ color: '#a0aec0', fontSize: '0.85rem' }}>🖼️</span>}
             </div>
