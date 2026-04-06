@@ -5,15 +5,52 @@ import { ProfileCard } from '@/components/ProfileCard';
 import { SocialGraph } from '@/components/SocialGraph';
 import { AssetList } from '@/components/AssetList';
 import { ActivityList } from '@/components/ActivityList';
-import { useState, Suspense } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useState, Suspense, useCallback, useEffect } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
 
 type TabType = 'assets' | 'social' | 'activity';
 
 function ViewerInner() {
   const searchParams = useSearchParams();
+  const router = useRouter();
+
+  // URL param address
   const urlAddress = searchParams.get('address') as `0x${string}` | null;
+
+  // View mode address (from UI search)
+  const viewAddressParam = searchParams.get('view') as `0x${string}` | null;
+  const [viewAddress, setViewAddress] = useState<`0x${string}` | null>(viewAddressParam);
+
+  // Active address: view mode > URL param > wallet
+  const activeAddress = viewAddress || urlAddress || undefined;
+  const isViewMode = !!viewAddress || !!urlAddress;
+
+  // Keep URL synced when view address changes
+  useEffect(() => {
+    if (viewAddress) {
+      router.replace(`?view=${viewAddress}`, { scroll: false });
+    }
+  }, [viewAddress, router]);
+
+  // Sync viewAddress from URL (e.g. shared link)
+  useEffect(() => {
+    if (viewAddressParam && viewAddressParam !== viewAddress) {
+      setViewAddress(viewAddressParam);
+    }
+  }, [viewAddressParam]);
+
   const [activeTab, setActiveTab] = useState<TabType>('assets');
+  const [showSearch, setShowSearch] = useState(false);
+
+  const handleSelectAddress = useCallback((addr: `0x${string}`) => {
+    setViewAddress(addr);
+    setShowSearch(false);
+  }, []);
+
+  const handleExitViewMode = useCallback(() => {
+    setViewAddress(null);
+    router.replace('/', { scroll: false });
+  }, [router]);
 
   return (
     <div style={styles.container}>
@@ -25,7 +62,22 @@ function ViewerInner() {
       </header>
 
       <div style={styles.content}>
-        <ProfileCard address={urlAddress || undefined} />
+        <ProfileCard
+          address={activeAddress}
+          isViewMode={isViewMode}
+          onExitViewMode={handleExitViewMode}
+          onToggleSearch={isViewMode ? undefined : () => setShowSearch(prev => !prev)}
+        />
+
+        {showSearch && (
+          <div style={{ paddingBottom: '4px' }}>
+            {/* Dynamic import to avoid SSR issues */}
+            <DynamicProfileSearch
+              onSelect={handleSelectAddress}
+              onCancel={() => setShowSearch(false)}
+            />
+          </div>
+        )}
 
         <div style={styles.tabs}>
           <button
@@ -48,9 +100,9 @@ function ViewerInner() {
           </button>
         </div>
 
-        {activeTab === 'assets' && <AssetList address={urlAddress || undefined} />}
-        {activeTab === 'social' && <SocialGraph />}
-        {activeTab === 'activity' && <ActivityList />}
+        {activeTab === 'assets' && <AssetList address={activeAddress} />}
+        {activeTab === 'social' && <SocialGraph address={activeAddress} />}
+        {activeTab === 'activity' && <ActivityList address={activeAddress} />}
       </div>
 
       <footer style={styles.footer}>
@@ -67,6 +119,19 @@ function ViewerInner() {
       </footer>
     </div>
   );
+}
+
+// Lazy-loaded ProfileSearch to avoid SSR issues
+function DynamicProfileSearch(props: { onSelect: (addr: `0x${string}`) => void; onCancel: () => void }) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [Comp, setComp] = useState<any>(null);
+
+  useEffect(() => {
+    import('@/components/ProfileSearch').then(m => setComp(() => m.ProfileSearch));
+  }, []);
+
+  if (!Comp) return <div style={{ textAlign: 'center', padding: '12px', color: '#a0aec0', fontSize: '0.8rem' }}>Loading search...</div>;
+  return <Comp {...props} />;
 }
 
 function ViewerContent() {
