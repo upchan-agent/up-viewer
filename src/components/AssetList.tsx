@@ -224,59 +224,44 @@ function NftChildItem({ entry, collFallback, onClick, renderIcon, styles, shorte
 
   const cacheKey = `${entry.contractAddress.toLowerCase()}-${toTokenIdHex(entry.tokenId)}`;
 
-  // Subscribe to cache updates instead of polling
-  const [apiResult, setApiResult] = useState<string | null | undefined>(() => {
-    if (_tokenImageCache.has(cacheKey)) return _tokenImageCache.get(cacheKey)!;
-    return undefined; // not yet fetched
-  });
-
+  // Cache listener — fires when batch fetch completes, triggers React re-render
+  const [, setTick] = useState(0);
   useEffect(() => {
-    // Check if result arrived while unmounted
-    if (_tokenImageCache.has(cacheKey)) {
-      setApiResult(_tokenImageCache.get(cacheKey)!);
-      return;
-    }
-    // Subscribe to future updates
-    const listener: CacheListener = (key, value) => {
-      if (key === cacheKey) setApiResult(value);
-    };
+    const listener: CacheListener = () => setTick(t => t + 1);
     _cacheListeners.add(listener);
     return () => { _cacheListeners.delete(listener); };
   }, [cacheKey]);
 
-  const apiAttempted = apiResult !== undefined;
-
   // Resolve image: same priority chain as popup.
-  // If useNft.images resolves → done immediately.
-  // If API not attempted → undefined (wait, show no partial).
-  // If API null-confirmed → fall through to icons / collFallback.
+  // Always reads _tokenImageCache directly (no state sync delay → no flicker).
   const resolvedIcon = useMemo((): CachedIcon | undefined => {
-    if (nftLoading) return undefined; // wait, don't show partial
+    const cachedApi = _tokenImageCache.has(cacheKey)
+      ? _tokenImageCache.get(cacheKey)!
+      : undefined;
+    const apiAttempted = cachedApi !== undefined;
+
+    if (cachedApi) return { url: cachedApi, scheme: 'api.token.images' };
+
+    const apiIsNull = apiAttempted && cachedApi === null;
+
+    if (nftLoading && !apiIsNull) return undefined;
 
     const da = nftData as any;
 
-    // 1st: useNft.images -- if found, done (no API wait needed)
-    if (da?.images) {
+    if (da?.images && !apiIsNull) {
       const imgs = flattenImages(da);
       for (const u of imgs) {
         if (isUsableIpfs(u)) return { url: toGatewayUrl(u)!, scheme: 'useNft.images' };
       }
     }
 
-    // 2nd: api.Token
-    if (!apiAttempted) return undefined; // API not started yet -- wait
-    if (apiResult) return { url: apiResult, scheme: 'api.token.images' }; // API found
-    // API null-confirmed -- fall through to remaining fallbacks
+    if (!apiAttempted) return undefined;
+    // API null-confirmed — fall through to remaining fallbacks
 
-    // 3rd: useNft.icons
     if (da?.icons?.[0]?.url) return { url: toGatewayUrl(da.icons[0].url)!, scheme: 'useNft.icons' };
-
-    // 4th: useNft.collection.icons
     if (da?.collection?.icons?.[0]?.url) return { url: toGatewayUrl(da.collection.icons[0].url)!, scheme: 'useNft.collection.icons' };
-
-    // 5th: collFallback (final fallback after all attempts exhausted)
     return collFallback;
-  }, [nftData, nftLoading, apiResult, apiAttempted, collFallback]);
+  }, [nftData, nftLoading, cacheKey, collFallback]);
 
   return (
     <div style={{ ...styles.item, marginLeft: '12px' }}
@@ -501,42 +486,38 @@ export function AssetList({ address }: AssetListProps) {
     const isExpanded = expandedCollections.has(coll.id.toLowerCase());
     const cIcon = getCachedIcon(`coll:${coll.id.toLowerCase()}`, coll.collectionIcon);
 
-    // On expand: clear cache for all children so they always retry fresh
+    // On collapse: clear in-flight (cache is preserved for next expand)
     useEffect(() => {
-      if (!isExpanded) return;
+      if (isExpanded) return;
       for (const child of coll.children) {
         const hex = toTokenIdHex(child.tokenId);
         const cKey = `${coll.id.toLowerCase()}-${hex}`;
-        _tokenImageCache.delete(cKey);
         _tokenImageInFlight.delete(cKey);
       }
-    }, [isExpanded, coll]);
+    }, [isExpanded]);
 
-    // Batch fetch: one GraphQL query for all children on expand
+    // Individual fetch per child via rate-limiter (more reliable than batch _or)
     useEffect(() => {
       if (!isExpanded) return;
 
-      const pending = coll.children
-        .map(child => {
-          const hex = toTokenIdHex(child.tokenId);
-          const cKey = `${coll.id.toLowerCase()}-${hex}`;
-          if (_tokenImageCache.has(cKey) || _tokenImageInFlight.has(cKey)) return null;
-          _tokenImageInFlight.add(cKey);
-          return { cacheKey: cKey, addr: coll.id, tidHex: hex };
-        })
-        .filter(Boolean) as { cacheKey: string; addr: string; tidHex: string }[];
+      for (const child of coll.children) {
+        const hex = toTokenIdHex(child.tokenId);
+        const cKey = `${coll.id.toLowerCase()}-${hex}`;
+        if (_tokenImageCache.has(cKey) || _tokenImageInFlight.has(cKey)) continue;
 
-      if (pending.length === 0) return;
-
-      fetchTokenImageBatch(pending).then(batchResult => {
-        for (const [key, url] of batchResult) {
-          notifyCacheUpdate(key, url);
-        }
-      }).catch(() => {
-        // Transient error: clear in-flight for retry on next expand
-        for (const p of pending) _tokenImageInFlight.delete(p.cacheKey);
-      });
-    }, [isExpanded, coll]);
+        _tokenImageInFlight.add(cKey);
+        fetchWithLimit(() => fetchTokenImage(coll.id, hex)).then(url => {
+          // Only cache positive results — don't cache false negatives
+          if (url) {
+            notifyCacheUpdate(cKey, url);
+          } else {
+            _tokenImageInFlight.delete(cKey);
+          }
+        }).catch(() => {
+          _tokenImageInFlight.delete(cKey);
+        });
+      }
+    }, [isExpanded, coll.id, coll.children]);
 
     return (
       <div>
