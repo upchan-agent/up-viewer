@@ -41,21 +41,27 @@ interface ProfileSearchProps {
 }
 
 export function ProfileSearch({ onSelect, onCancel }: ProfileSearchProps) {
+  // All state managed by refs (except query) to avoid re-render input unmount
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState<Profile[]>([]);
-  const [loading, setLoading] = useState(false);
+  const resultsRef = useRef<Profile[]>([]);
+  const [resultsTick, setResultsTick] = useState(0);
+  const loadingRef = useRef(false);
   const [showDropdown, setShowDropdown] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Force re-render of dropdown area only (input stays stable)
+  const tick = useCallback(() => setResultsTick(t => t + 1), []);
+
   const doSearch = useCallback(async (searchQuery: string) => {
     if (searchQuery.length < 3) {
-      setResults([]);
+      resultsRef.current = [];
       setShowDropdown(false);
+      tick();
       return;
     }
 
-    setLoading(true);
+    loadingRef.current = true;
     try {
       const res = await fetch(ENVIO_MAINNET_URL, {
         method: 'POST',
@@ -64,16 +70,16 @@ export function ProfileSearch({ onSelect, onCancel }: ProfileSearchProps) {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
-      const data: Profile[] = json.data?.search_profiles ?? [];
-      setResults(data);
-      setShowDropdown(data.length > 0);
+      resultsRef.current = json.data?.search_profiles ?? [];
+      setShowDropdown(resultsRef.current.length > 0);
     } catch {
-      setResults([]);
+      resultsRef.current = [];
       setShowDropdown(false);
     } finally {
-      setLoading(false);
+      loadingRef.current = false;
     }
-  }, []);
+    tick();
+  }, [tick]);
 
   const handleInputChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -83,26 +89,23 @@ export function ProfileSearch({ onSelect, onCancel }: ProfileSearchProps) {
       if (debounceRef.current) clearTimeout(debounceRef.current);
 
       if (val.length < 3) {
-        setResults([]);
+        resultsRef.current = [];
         setShowDropdown(false);
+        tick();
         return;
       }
 
-      // Check if it looks like an address (0x + hex)
       const looksLikeAddress = /^0x[0-9a-f]{5,}/i.test(val);
 
       if (looksLikeAddress) {
-        // Address paste — wait a bit for the full paste, then search immediately
         debounceRef.current = setTimeout(() => doSearch(val), 400);
       } else if (val.length === 3) {
-        // Exactly 3 chars — auto search immediately
         doSearch(val);
       } else {
-        // >3 chars, not an address — debounce 800ms then search
         debounceRef.current = setTimeout(() => doSearch(val), 800);
       }
     },
-    [doSearch]
+    [doSearch, tick]
   );
 
   const handleKeyDown = useCallback(
@@ -131,10 +134,12 @@ export function ProfileSearch({ onSelect, onCancel }: ProfileSearchProps) {
     return () => document.removeEventListener('click', handler);
   }, []);
 
-  // Cleanup debounce on unmount
   useEffect(() => {
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, []);
+
+  // Stable input ref + dropdown state
+  const results = resultsRef.current;
 
   return (
     <div data-search-root style={styles.root}>
@@ -145,10 +150,8 @@ export function ProfileSearch({ onSelect, onCancel }: ProfileSearchProps) {
           value={query}
           onChange={handleInputChange}
           onKeyDown={handleKeyDown}
-          placeholder={loading ? '⏳' : '🔍 Enter 3 chars or paste address...'}
+          placeholder="🔍 Enter 3 chars or paste address..."
           style={styles.input}
-          disabled={loading}
-          // No autoFocus — iOS loses focus on re-render when search fires
         />
         <button onClick={onCancel} style={styles.cancelButton}>
           ✕
@@ -156,7 +159,7 @@ export function ProfileSearch({ onSelect, onCancel }: ProfileSearchProps) {
       </div>
 
       {showDropdown && results.length > 0 && (
-        <div style={styles.dropdown}>
+        <div key={`dd-${resultsTick}`} style={styles.dropdown}>
           {results.map((r) => (
             <button key={r.id} style={styles.resultItem} onClick={() => handleSelect(r)}>
               <div style={styles.resultAvatar}>
@@ -182,7 +185,6 @@ export function ProfileSearch({ onSelect, onCancel }: ProfileSearchProps) {
 const styles: Record<string, React.CSSProperties> = {
   root: {
     position: 'relative',
-    // No marginBottom — container gap handles it
   },
   inputRow: {
     display: 'flex',
@@ -235,7 +237,6 @@ const styles: Record<string, React.CSSProperties> = {
     background: '#fff',
     cursor: 'pointer',
     textAlign: 'left',
-    transition: 'background 0.1s',
   },
   resultAvatar: {
     width: '36px',
