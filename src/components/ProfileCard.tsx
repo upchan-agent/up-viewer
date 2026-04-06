@@ -53,9 +53,10 @@ export function ProfileCard({
 
   return (
     <div style={styles.card}>
-      {/* Connection Status Section */}
+      {/* Connection Status Section — always renders */}
       <div style={styles.connectionSection}>
-        {/* View Mode State */}
+
+        {/* ── View Mode: override all normal states ── */}
         {isViewMode && onExitViewMode && (
           <div style={styles.viewModeRow}>
             <span style={styles.viewModeIcon}>👁️</span>
@@ -63,15 +64,10 @@ export function ProfileCard({
             <button onClick={onExitViewMode} style={styles.exitButton}>
               Exit
             </button>
-            {onToggleSearch && (
-              <button onClick={onToggleSearch} style={styles.searchButton}>
-                🔍
-              </button>
-            )}
           </div>
         )}
 
-        {/* Normal states (when not in view mode) */}
+        {/* ── Normal states (hidden in view mode) ── */}
         {!isViewMode && (
           <>
             {isDetecting && (
@@ -120,6 +116,13 @@ export function ProfileCard({
             )}
           </>
         )}
+
+        {/* ── 🔍 Search button — always visible ── */}
+        {onToggleSearch && (
+          <button onClick={onToggleSearch} style={styles.searchButtonFixed} aria-label="Search UP">
+            🔍
+          </button>
+        )}
       </div>
 
       {/* Profile Section */}
@@ -159,7 +162,7 @@ const styles: { [key: string]: React.CSSProperties } = {
   },
   connectionSection: {
     marginBottom: '8px',
-    height: '20px',
+    minHeight: '20px',
     position: 'relative',
   },
   /* ─── View Mode ─── */
@@ -191,14 +194,19 @@ const styles: { [key: string]: React.CSSProperties } = {
     cursor: 'pointer',
     flexShrink: 0,
   },
-  searchButton: {
+  /* ─── Search Button (always visible, fixed right) ─── */
+  searchButtonFixed: {
+    position: 'absolute',
+    right: '0',
+    top: '0',
     padding: '2px 6px',
-    background: '#f7fafc',
-    border: 'none',
+    background: 'rgba(255,255,255,0.8)',
+    border: '1px solid #e2e8f0',
     borderRadius: '6px',
     fontSize: '0.85rem',
     cursor: 'pointer',
     flexShrink: 0,
+    lineHeight: 1,
   },
   /* ─── Skeleton ─── */
   skeletonRow: {
@@ -243,6 +251,7 @@ const styles: { [key: string]: React.CSSProperties } = {
   },
   switchButton: {
     marginLeft: 'auto',
+    marginRight: '28px',
     padding: '4px 10px',
     background: '#e2e8f0',
     border: 'none',
@@ -287,7 +296,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     whiteSpace: 'nowrap',
   },
   connectButton: {
-    marginLeft: 'auto',
+    marginRight: '28px',
     padding: '4px 12px',
     background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
     border: 'none',
