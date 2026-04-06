@@ -477,13 +477,13 @@ export function AssetList({ address }: AssetListProps) {
     for (const { key, fetchFn, scheme } of keysToFetch) {
       fetchWithLimit(fetchFn).then(url => {
         fetchInFlight.current.delete(key);
-        // null = server confirmed no image — store to prevent refetch loop
-        setIconCache(prev => { const n = new Map(prev); n.set(key, { url: url ?? '', scheme }); return n; });
+        // Only cache if we actually found an image
+        if (url) {
+          setIconCache(prev => { const n = new Map(prev); n.set(key, { url, scheme }); return n; });
+        }
       }).catch(() => {
         fetchInFlight.current.delete(key);
-        // Transient error: also store to prevent refetch loop (will retry on next re-render cycle)
-        // Use empty string as sentinel — getCachedIcon treats empty url as no image
-        setIconCache(prev => { const n = new Map(prev); n.set(key, { url: '', scheme }); return n; });
+        // Don't cache errors — allows retry on next render cycle
       });
     }
   }, [tokenItems, lsp7Nfts, nftTree]); // NOTE: iconCache intentionally excluded to prevent infinite re-fetch
