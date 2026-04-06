@@ -145,10 +145,10 @@ export function ProfileSearch({ onSelect, onCancel }: ProfileSearchProps) {
           value={query}
           onChange={handleInputChange}
           onKeyDown={handleKeyDown}
-          placeholder={loading ? '⏳ Searching...' : '🔍 Enter 3 chars or paste address...'}
+          placeholder={loading ? '⏳' : '🔍 Enter 3 chars or paste address...'}
           style={styles.input}
           disabled={loading}
-          autoFocus
+          // No autoFocus — iOS loses focus on re-render when search fires
         />
         <button onClick={onCancel} style={styles.cancelButton}>
           ✕
@@ -193,7 +193,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '10px 12px',
     border: '1px solid #e2e8f0',
     borderRadius: '10px',
-    fontSize: '14px',
+    fontSize: '16px',
     outline: 'none',
     background: '#fff',
   },

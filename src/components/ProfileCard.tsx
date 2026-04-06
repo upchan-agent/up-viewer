@@ -59,7 +59,7 @@ export function ProfileCard({
         {/* ── View Mode: override all normal states ── */}
         {isViewMode && onExitViewMode && (
           <div style={styles.viewModeRow}>
-            <span style={styles.viewModeIcon}>👁️</span>
+            <span style={styles.viewModeIcon}>👀</span>
             <span style={styles.viewModeText}>View mode</span>
             <button onClick={onExitViewMode} style={styles.exitButton}>
               Exit
