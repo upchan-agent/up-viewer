@@ -5,7 +5,7 @@ import { ProfileCard } from '@/components/ProfileCard';
 import { SocialGraph } from '@/components/SocialGraph';
 import { AssetList } from '@/components/AssetList';
 import { ActivityList } from '@/components/ActivityList';
-import { useState, Suspense, useCallback, useEffect } from 'react';
+import { useState, Suspense, useCallback, useEffect, useRef } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 
 type TabType = 'assets' | 'social' | 'activity';
@@ -119,16 +119,22 @@ function ViewerInner() {
 }
 
 // Lazy-loaded ProfileSearch to avoid SSR issues
+// Uses useRef to prevent re-mount on every render (keeps input focus)
 function DynamicProfileSearch(props: { onSelect: (addr: `0x${string}`) => void; onCancel: () => void }) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [Comp, setComp] = useState<any>(null);
+  const ref = useRef<{ default?: any; ProfileSearch?: any } | null>(null);
+  const [, setTick] = useState(0);
 
   useEffect(() => {
-    import('@/components/ProfileSearch').then(m => setComp(() => m.ProfileSearch));
+    if (ref.current) return;
+    import('@/components/ProfileSearch').then(m => {
+      ref.current = m;
+      setTick(t => t + 1);
+    });
   }, []);
 
-  if (!Comp) return <div style={{ textAlign: 'center', padding: '12px', color: '#a0aec0', fontSize: '0.8rem' }}>Loading search...</div>;
-  return <Comp {...props} />;
+  const ProfileSearch = ref.current?.ProfileSearch;
+  if (!ProfileSearch) return null;
+  return <ProfileSearch {...props} />;
 }
 
 function ViewerContent() {

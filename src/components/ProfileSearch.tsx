@@ -46,6 +46,7 @@ export function ProfileSearch({ onSelect, onCancel }: ProfileSearchProps) {
   const [loading, setLoading] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const doSearch = useCallback(async (searchQuery: string) => {
     if (searchQuery.length < 3) {
@@ -139,11 +140,12 @@ export function ProfileSearch({ onSelect, onCancel }: ProfileSearchProps) {
     <div data-search-root style={styles.root}>
       <div style={styles.inputRow}>
         <input
+          ref={inputRef}
           type="text"
           value={query}
           onChange={handleInputChange}
           onKeyDown={handleKeyDown}
-          placeholder="🔍 Enter 3 chars or paste address..."
+          placeholder={loading ? '⏳ Searching...' : '🔍 Enter 3 chars or paste address...'}
           style={styles.input}
           disabled={loading}
           autoFocus
@@ -173,8 +175,6 @@ export function ProfileSearch({ onSelect, onCancel }: ProfileSearchProps) {
           ))}
         </div>
       )}
-
-      {loading && <div style={styles.loading}>⏳ Searching...</div>}
     </div>
   );
 }
@@ -280,11 +280,5 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '0.7rem',
     color: '#a0aec0',
     fontFamily: 'monospace',
-  },
-  loading: {
-    textAlign: 'center',
-    padding: '8px',
-    fontSize: '0.8rem',
-    color: '#a0aec0',
   },
 };
