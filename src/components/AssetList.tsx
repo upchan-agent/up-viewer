@@ -65,8 +65,6 @@ function fetchWithLimit(fn: () => Promise<string | null>): Promise<string | null
   });
 }
 
-// Retry: only on HTTP/network errors (throw), NOT on null results.
-// null = "no image exists" — retrying won't help.
 const MAX_RETRIES = 2;
 async function fetchWithRetry(fn: () => Promise<string | null>): Promise<string | null> {
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -77,30 +75,6 @@ async function fetchWithRetry(fn: () => Promise<string | null>): Promise<string 
     }
   }
   return null;
-}
-
-// ─── Persistent cache for API results ──────────────────────
-// _tokenImageCache (LSP8 child NFTs):
-//   string = found, null = server confirmed no image, undefined = not fetched or transient error
-// _tokenImageInFlight: keys currently being fetched
-// _tokenImageErrors: keys with transient errors (deleted on collapse, retried on next expand)
-const _tokenImageCache = new Map<string, string | null>();
-const _tokenImageInFlight = new Set<string>();
-
-// Listeners: NftChildItem components subscribe to cache updates
-type CacheListener = (key: string, value: string | null) => void;
-const _cacheListeners = new Set<CacheListener>();
-
-function notifyCacheUpdate(key: string, value: string | null) {
-  _tokenImageInFlight.delete(key);
-  if (value === '__error__') {
-    // Transient error: remove from cache so next expand retries.
-    // Don't notify listeners (keeps apiResult undefined → shows fallback)
-    _tokenImageCache.delete(key);
-  } else {
-    _tokenImageCache.set(key, value);
-    for (const listener of _cacheListeners) listener(key, value);
-  }
 }
 
 // ─── API fetchers ──────────────────────────────────────────
@@ -129,53 +103,53 @@ async function fetchTokenImage(addr: string, tidHex: string): Promise<string | n
   return null;
 }
 
-// Batch fetch: multiple tokens in one query using _or filter
-// Returns Map<cacheKey, url | null>
-async function fetchTokenImageBatch(
-  requests: { cacheKey: string; addr: string; tidHex: string }[]
-): Promise<Map<string, string | null>> {
-  if (requests.length === 0) return new Map();
-  const whereClauses = requests.map(r => `{id:{_eq:"${r.addr.toLowerCase()}-${r.tidHex}"}}`).join(',');
-  const query = `{Token(where:{_or:[${whereClauses}]}){id images{url}icons{url}}}`;
-  const res = await fetch(INDEXER_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query }),
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const json = await res.json();
-  const tokens = json.data?.Token ?? [];
-  const result = new Map<string, string | null>();
-  // Pre-populate all as null ("confirmed no image")
-  for (const r of requests) result.set(r.cacheKey, null);
-  // Override with actual results
-  for (const t of tokens) {
-    if (t?.images?.[0]?.url) {
-      const url = toGatewayUrl(t.images[0].url) ?? null;
-      const match = requests.find(r => t.id === `${r.addr.toLowerCase()}-${r.tidHex}`);
-      if (match && url) result.set(match.cacheKey, url);
-    } else if (t?.icons?.[0]?.url) {
-      const url = toGatewayUrl(t.icons[0].url) ?? null;
-      const match = requests.find(r => t.id === `${r.addr.toLowerCase()}-${r.tidHex}`);
-      if (match && url) result.set(match.cacheKey, url);
-    }
-  }
-  return result;
+// ─── Module-level API image cache ─────────────────────────
+// key → string: resolved URL
+// key → null:   API confirmed no image (don't retry)
+// key absent:   not yet fetched
+//
+// Per-key subscriber map: components register a re-render callback.
+// Only the component watching a given key is notified — no broadcast.
+const _apiCache = new Map<string, string | null>();
+const _apiSubs = new Map<string, Set<() => void>>();
+const _apiInFlight = new Set<string>();
+
+function _apiSubscribe(key: string, cb: () => void): () => void {
+  if (!_apiSubs.has(key)) _apiSubs.set(key, new Set());
+  _apiSubs.get(key)!.add(cb);
+  return () => _apiSubs.get(key)?.delete(cb);
 }
 
-// ─── Cached icon type ──────────────────────────────────────
+function _apiNotify(key: string) {
+  _apiSubs.get(key)?.forEach(cb => cb());
+}
 
-interface CachedIcon {
+// Initiate a fetch for `key` if not already cached or in-flight.
+// On completion (url or null), stores in cache and notifies subscribers.
+// Transient errors (throw) are not cached — next call will retry.
+function _apiFetch(key: string, fn: () => Promise<string | null>) {
+  if (_apiCache.has(key) || _apiInFlight.has(key)) return;
+  _apiInFlight.add(key);
+  fetchWithLimit(fn)
+    .then(url => { _apiCache.set(key, url); })
+    .catch(() => { /* transient error: leave absent so next mount retries */ })
+    .finally(() => { _apiInFlight.delete(key); _apiNotify(key); });
+}
+
+// ─── ResolvedIcon ──────────────────────────────────────────
+
+interface ResolvedIcon {
   url: string;
   scheme: string;
 }
 
-function resolveDaIcon(item: any): CachedIcon | null {
+function resolveDaIcon(item: any): ResolvedIcon | null {
   if (!item) return null;
-  const da = item.digitalAsset;
-  if (da?.icons?.[0]?.url) return { url: toGatewayUrl(da.icons[0].url)!, scheme: 'ownedAsset.digitalAsset.icons' };
-  if (da?.images?.[0]?.url) return { url: toGatewayUrl(da.images[0].url)!, scheme: 'ownedAsset.digitalAsset.images' };
-  if (da?.url?.startsWith('ipfs://')) return { url: toGatewayUrl(da.url)!, scheme: 'ownedAsset.digitalAsset.url' };
+  const digitalAsset = item.digitalAsset;
+  if (digitalAsset?.icons?.[0]?.url) return { url: toGatewayUrl(digitalAsset.icons[0].url)!, scheme: 'ownedAsset.digitalAsset.icons' };
+  if (digitalAsset?.images?.[0]?.url) return { url: toGatewayUrl(digitalAsset.images[0].url)!, scheme: 'ownedAsset.digitalAsset.images' };
+  // digitalAsset.url (LSP4TokenURI) intentionally excluded:
+  // it points to a metadata JSON, not an image, and is not a reliable image source.
   return null;
 }
 
@@ -184,91 +158,362 @@ function resolveDaIcon(item: any): CachedIcon | null {
 interface TokenItem {
   id: string; name: string; symbol: string; amount: string;
   contractAddress: string; type: string;
-  indexerIcon?: CachedIcon;
+  indexerIcon?: ResolvedIcon;
 }
 
 interface NftListEntry {
   id: string; name: string; symbol: string;
   tokenId: string; rawTokenId: string; contractAddress: string;
-  collFallback?: CachedIcon;
+  collectionFallbackIcon?: ResolvedIcon;
   amount?: string;
 }
 
 interface NftCollEntry {
   isCollection: true;
   id: string; name: string; symbol: string;
-  collectionIcon?: CachedIcon; count: number; children: NftListEntry[];
+  collectionIcon?: ResolvedIcon; count: number; children: NftListEntry[];
 }
 
 type NftRenderItem = NftListEntry | NftCollEntry;
 const isColl = (x: NftRenderItem): x is NftCollEntry => 'isCollection' in x && x.isCollection;
 
-// ─── Child item component ──────────────────────────────────
-// Uses useNft for image, subscribes to cache for API fallback.
-// Fallback chain: useNft.images → api.Token → useNft.icons → collFallback → 🖼️
+// ─── useLsp8ChildImage ─────────────────────────────────────
+// Resolves an image for a single LSP8 child NFT.
+// Priority chain (mirrors popup exactly):
+//   1. useNft.images              (flattenImages + isUsableIpfs)
+//   2. api.Token                  (fetchTokenImage — covers non-standard NFTs)
+//   3. useNft.icons
+//   4. useNft.collection.icons
+//   5. ownedToken.nft icons/images (passed as nftIndexerData — popup only)
+//   6. collectionFallbackIcon      (parent collection icon)
+//
+// All 6 levels are always evaluated and recorded in debug[], regardless of
+// which level resolved the image. This gives complete visibility in the
+// debug panel even when resolution succeeds early.
+//
+// Return value:
+//   undefined           → still resolving (caller shows placeholder)
+//   { url: '', ... }    → confirmed no image (caller shows emoji)
+//   { url: '...', ... } → resolved (caller shows image)
+//
+// useNft timeout: if isLoading stays true beyond NFT_HOOK_TIMEOUT_MS,
+// the hook stops waiting and proceeds to the API + fallback chain.
+// timedOut is stored in a ref (not state) so it never resets when
+// nftLoadingRaw later becomes false — eliminating the "stuck on loading" bug.
 
-function NftChildItem({ entry, collFallback, onClick, renderIcon, styles, shortenId, handleSelectAsset }: {
-  entry: NftListEntry;
-  collFallback?: CachedIcon;
-  onClick: (e: React.MouseEvent) => void;
-  renderIcon: (icon: CachedIcon | undefined, fallbackEmoji: string) => React.ReactNode;
-  styles: Record<string, React.CSSProperties>;
-  shortenId: (id: string, maxLen?: number) => string;
-  handleSelectAsset: (type: 'token' | 'nft', addr: string, formattedTokenId?: string, e?: React.MouseEvent) => void;
-}) {
-  const { nft: nftData, isLoading: nftLoading } = useNft({
-    address: entry.contractAddress.toLowerCase(),
-    formattedTokenId: entry.tokenId,
-    include: { images: true, icons: true, collection: { icons: true } },
+const NFT_HOOK_TIMEOUT_MS = 5000;
+
+interface ResolvedNftImage {
+  url: string;
+  scheme: string;
+  debug: string[];
+}
+
+function useLsp8ChildImage({
+  contractAddress,
+  formattedTokenId,
+  collectionFallbackIcon,
+  nftIndexerData,
+}: {
+  contractAddress: string;
+  formattedTokenId: string;
+  collectionFallbackIcon?: ResolvedIcon;
+  nftIndexerData?: any; // (selectedOwnedData as any)?.nft — popup only
+}): ResolvedNftImage | undefined {
+  const contractAddressLower = contractAddress.toLowerCase();
+  const tokenIdHex = toTokenIdHex(formattedTokenId);
+  const imageCacheKey = `lsp8:${contractAddressLower}:${tokenIdHex}`;
+
+  // ── useNft ──────────────────────────────────────────────
+  const { nft: nftData, isLoading: nftLoadingRaw } = useNft({
+    address: contractAddressLower,
+    formattedTokenId,
+    include: {
+      name: true, icons: true, images: true,
+      description: true, links: true, attributes: true,
+      category: true, collection: { baseUri: true, icons: true },
+    },
   });
 
-  const cacheKey = `${entry.contractAddress.toLowerCase()}-${toTokenIdHex(entry.tokenId)}`;
-
-  // Cache listener — fires when batch fetch completes, triggers React re-render
-  const [, setTick] = useState(0);
+  // ── useNft timeout ──────────────────────────────────────
+  const hasTimedOut = useRef(false);
+  const [, forceUpdate] = useState(0);
   useEffect(() => {
-    const listener: CacheListener = () => setTick(t => t + 1);
-    _cacheListeners.add(listener);
-    return () => { _cacheListeners.delete(listener); };
-  }, [cacheKey]);
+    if (!nftLoadingRaw) { hasTimedOut.current = false; return; }
+    const timeoutId = setTimeout(() => { hasTimedOut.current = true; forceUpdate(n => n + 1); }, NFT_HOOK_TIMEOUT_MS);
+    return () => clearTimeout(timeoutId);
+  // imageCacheKey as proxy for "new asset" — resets timer when asset changes
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [imageCacheKey]);
 
-  // Resolve image: same priority chain as popup.
-  // Always reads _tokenImageCache directly (no state sync delay → no flicker).
-  const resolvedIcon = useMemo((): CachedIcon | undefined => {
-    const cachedApi = _tokenImageCache.has(cacheKey)
-      ? _tokenImageCache.get(cacheKey)!
-      : undefined;
-    const apiAttempted = cachedApi !== undefined;
+  const nftHookIsLoading = nftLoadingRaw && !hasTimedOut.current;
 
-    if (cachedApi) return { url: cachedApi, scheme: 'api.token.images' };
+  // ── Subscribe to API cache for this key ─────────────────
+  const [, setApiCacheTick] = useState(0);
+  useEffect(() => _apiSubscribe(imageCacheKey, () => setApiCacheTick(tick => tick + 1)), [imageCacheKey]);
 
-    const apiIsNull = apiAttempted && cachedApi === null;
+  // ── Kick off API fetch once useNft is settled ───────────
+  useEffect(() => {
+    if (nftHookIsLoading) return;
+    const nftMetadata = nftData as any;
+    const nftImages = nftMetadata ? flattenImages(nftMetadata) : [];
+    if (nftImages.some(isUsableIpfs)) return; // useNft succeeded — skip API
+    _apiFetch(imageCacheKey, () => fetchTokenImage(contractAddressLower, tokenIdHex));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nftHookIsLoading, imageCacheKey]);
 
-    if (nftLoading && !apiIsNull) return undefined;
+  // ── Priority chain — all levels evaluated before returning ─
+  // Each level is always checked and logged, so debug[] always shows
+  // the complete picture regardless of which level resolved the image.
 
-    const da = nftData as any;
+  if (nftHookIsLoading) return undefined; // waiting for useNft hook
 
-    if (da?.images && !apiIsNull) {
-      const imgs = flattenImages(da);
-      for (const u of imgs) {
-        if (isUsableIpfs(u)) return { url: toGatewayUrl(u)!, scheme: 'useNft.images' };
-      }
-    }
+  const nftMetadata = nftData as any;
+  const debug: string[] = [];
 
-    if (!apiAttempted) return undefined;
-    // API null-confirmed — fall through to remaining fallbacks
+  // 1st: useNft.images
+  const nftImages = nftMetadata ? flattenImages(nftMetadata) : [];
+  const usableImageUrl = nftImages.find(isUsableIpfs);
+  debug.push(`1st useNft.images: ${usableImageUrl ? '✓ ' + usableImageUrl : '(none)'}`);
 
-    if (da?.icons?.[0]?.url) return { url: toGatewayUrl(da.icons[0].url)!, scheme: 'useNft.icons' };
-    if (da?.collection?.icons?.[0]?.url) return { url: toGatewayUrl(da.collection.icons[0].url)!, scheme: 'useNft.collection.icons' };
-    return collFallback;
-  }, [nftData, nftLoading, cacheKey, collFallback]);
+  // 2nd: api.Token
+  const cachedImageUrl = _apiCache.has(imageCacheKey) ? _apiCache.get(imageCacheKey) : undefined;
+  const isCacheSettled = cachedImageUrl !== undefined;
+  debug.push(`2nd api.Token: ${!isCacheSettled ? '(pending...)' : cachedImageUrl ? '✓ ' + cachedImageUrl : '(null)'}`);
+
+  // 3rd: useNft.icons
+  const nftIconUrl = nftMetadata?.icons?.[0]?.url;
+  debug.push(`3rd useNft.icons: ${nftIconUrl ? '✓ ' + nftIconUrl : '(none)'}`);
+
+  // 4th: useNft.collection.icons
+  const collectionIconUrl = nftMetadata?.collection?.icons?.[0]?.url;
+  debug.push(`4th useNft.collection.icons: ${collectionIconUrl ? '✓ ' + collectionIconUrl : '(none)'}`);
+
+  // 5th: ownedToken.nft indexer (popup only — undefined in list context)
+  const indexerImageUrl = nftIndexerData?.icons?.[0]?.url || nftIndexerData?.images?.[0]?.url;
+  debug.push(`5th ownedToken.nft indexer: ${indexerImageUrl ? '✓ ' + indexerImageUrl : nftIndexerData ? '(none)' : '(list — n/a)'}`);
+
+  // 6th: collectionFallbackIcon
+  debug.push(`6th collectionFallbackIcon: ${collectionFallbackIcon?.url ? '✓ ' + collectionFallbackIcon.url : '(none)'}`);
+
+  // ── Select winner in priority order ─────────────────────
+  if (usableImageUrl) {
+    debug.push(`selected: 1st`);
+    return { url: toGatewayUrl(usableImageUrl)!, scheme: 'useNft.images', debug };
+  }
+  if (!isCacheSettled) return undefined; // still waiting for API
+  if (cachedImageUrl) {
+    debug.push(`selected: 2nd`);
+    return { url: cachedImageUrl, scheme: 'api.Token', debug };
+  }
+  if (nftIconUrl) {
+    debug.push(`selected: 3rd`);
+    return { url: toGatewayUrl(nftIconUrl)!, scheme: 'useNft.icons', debug };
+  }
+  if (collectionIconUrl) {
+    debug.push(`selected: 4th`);
+    return { url: toGatewayUrl(collectionIconUrl)!, scheme: 'useNft.collection.icons', debug };
+  }
+  if (indexerImageUrl) {
+    debug.push(`selected: 5th`);
+    return { url: toGatewayUrl(indexerImageUrl)!, scheme: 'ownedToken.nft', debug };
+  }
+  if (collectionFallbackIcon?.url) {
+    debug.push(`selected: 6th`);
+    return { url: collectionFallbackIcon.url, scheme: 'collectionFallbackIcon', debug };
+  }
+
+  debug.push(`selected: none`);
+  return { url: '', scheme: 'none', debug };
+}
+
+// ─── useLsp8CollectionImage ────────────────────────────────
+// Resolves the header image for an LSP8 collection (the parent row).
+// Simpler than child resolution — no useNft involved:
+//   1. ownedAsset indexer data  (resolveDaIcon result passed as collectionIcon)
+//   2. api.Asset                (fetchAssetImage fallback)
+
+function useLsp8CollectionImage({
+  collectionAddress,
+  collectionIcon,
+}: {
+  collectionAddress: string;
+  collectionIcon?: ResolvedIcon;
+}): { icon: ResolvedIcon | undefined; debug: string[] } {
+  const imageCacheKey = `lsp8coll:${collectionAddress.toLowerCase()}`;
+
+  const [, setApiCacheTick] = useState(0);
+  useEffect(() => _apiSubscribe(imageCacheKey, () => setApiCacheTick(tick => tick + 1)), [imageCacheKey]);
+
+  useEffect(() => {
+    if (collectionIcon) return; // indexer provided icon — skip API
+    _apiFetch(imageCacheKey, () => fetchAssetImage(collectionAddress));
+  }, [imageCacheKey, collectionAddress, collectionIcon]);
+
+  const debug: string[] = [];
+
+  // 1st: ownedAsset indexer
+  debug.push(`1st ownedAsset indexer: ${collectionIcon?.url ? '✓ ' + collectionIcon.url : '(none)'}`);
+
+  // 2nd: api.Asset
+  const cachedImageUrl = _apiCache.has(imageCacheKey) ? _apiCache.get(imageCacheKey) : undefined;
+  const isCacheSettled = cachedImageUrl !== undefined;
+  debug.push(`2nd api.Asset: ${!isCacheSettled ? '(pending...)' : cachedImageUrl ? '✓ ' + cachedImageUrl : '(null)'}`);
+
+  if (collectionIcon?.url) return { icon: collectionIcon, debug };
+  if (cachedImageUrl) return { icon: { url: cachedImageUrl, scheme: 'api.Asset' }, debug };
+  return { icon: undefined, debug };
+}
+
+// ─── useTokenImage ─────────────────────────────────────────
+// Resolves an image for a fungible Token (LSP7 TOKEN type).
+// Priority chain:
+//   1. ownedAsset indexer icons   (resolveDaIcon → digitalAsset.icons)
+//   2. ownedAsset indexer images  (resolveDaIcon → digitalAsset.images)
+//   3. api.Asset                  (fetchAssetImage fallback)
+//
+// The indexerIcon is the result of resolveDaIcon() already split into
+// its two sub-sources for debug transparency.
+// All levels always evaluated before returning.
+
+function useTokenImage({
+  contractAddress,
+  indexerIcon,
+}: {
+  contractAddress: string;
+  indexerIcon?: ResolvedIcon;
+}): ResolvedNftImage | undefined {
+  const imageCacheKey = `token:${contractAddress.toLowerCase()}`;
+
+  const [, setApiCacheTick] = useState(0);
+  useEffect(() => _apiSubscribe(imageCacheKey, () => setApiCacheTick(tick => tick + 1)), [imageCacheKey]);
+
+  useEffect(() => {
+    if (indexerIcon) return; // indexer already provided icon — skip API
+    _apiFetch(imageCacheKey, () => fetchAssetImage(contractAddress));
+  }, [imageCacheKey, contractAddress, indexerIcon]);
+
+  const debug: string[] = [];
+
+  // 1st: ownedAsset.digitalAsset.icons
+  const indexerIconsUrl = indexerIcon?.scheme === 'ownedAsset.digitalAsset.icons' ? indexerIcon.url : undefined;
+  debug.push(`1st ownedAsset.digitalAsset.icons: ${indexerIconsUrl ? '✓ ' + indexerIconsUrl : '(none)'}`);
+
+  // 2nd: ownedAsset.digitalAsset.images
+  const indexerImagesUrl = indexerIcon?.scheme === 'ownedAsset.digitalAsset.images' ? indexerIcon.url : undefined;
+  debug.push(`2nd ownedAsset.digitalAsset.images: ${indexerImagesUrl ? '✓ ' + indexerImagesUrl : '(none)'}`);
+
+  // 3rd: api.Asset
+  const cachedImageUrl = _apiCache.has(imageCacheKey) ? _apiCache.get(imageCacheKey) : undefined;
+  const isCacheSettled = cachedImageUrl !== undefined;
+  debug.push(`3rd api.Asset: ${!isCacheSettled ? '(pending...)' : cachedImageUrl ? '✓ ' + cachedImageUrl : '(null)'}`);
+
+  // Select winner
+  if (indexerIconsUrl) {
+    debug.push(`selected: 1st`);
+    return { url: indexerIconsUrl, scheme: 'ownedAsset.digitalAsset.icons', debug };
+  }
+  if (indexerImagesUrl) {
+    debug.push(`selected: 2nd`);
+    return { url: indexerImagesUrl, scheme: 'ownedAsset.digitalAsset.images', debug };
+  }
+  if (!isCacheSettled) return undefined; // waiting for API
+  if (cachedImageUrl) {
+    debug.push(`selected: 3rd`);
+    return { url: cachedImageUrl, scheme: 'api.Asset', debug };
+  }
+
+  debug.push(`selected: none`);
+  return { url: '', scheme: 'none', debug };
+}
+
+// ─── useLsp7SingleNftImage ──────────────────────────────────
+// Resolves an image for a LSP7 Single NFT (tokenType: NFT or COLLECTION,
+// no individual token IDs — held as a single ownedAsset entry).
+// Priority chain is identical to useTokenImage:
+//   1. ownedAsset indexer icons
+//   2. ownedAsset indexer images
+//   3. api.Asset
+//
+// Kept as a separate hook (rather than reusing useTokenImage) so that
+// the cache key namespace is distinct and debug labels are accurate.
+
+function useLsp7SingleNftImage({
+  contractAddress,
+  indexerIcon,
+}: {
+  contractAddress: string;
+  indexerIcon?: ResolvedIcon;
+}): ResolvedNftImage | undefined {
+  const imageCacheKey = `lsp7nft:${contractAddress.toLowerCase()}`;
+
+  const [, setApiCacheTick] = useState(0);
+  useEffect(() => _apiSubscribe(imageCacheKey, () => setApiCacheTick(tick => tick + 1)), [imageCacheKey]);
+
+  useEffect(() => {
+    if (indexerIcon) return;
+    _apiFetch(imageCacheKey, () => fetchAssetImage(contractAddress));
+  }, [imageCacheKey, contractAddress, indexerIcon]);
+
+  const debug: string[] = [];
+
+  // 1st: ownedAsset.digitalAsset.icons
+  const indexerIconsUrl = indexerIcon?.scheme === 'ownedAsset.digitalAsset.icons' ? indexerIcon.url : undefined;
+  debug.push(`1st ownedAsset.digitalAsset.icons: ${indexerIconsUrl ? '✓ ' + indexerIconsUrl : '(none)'}`);
+
+  // 2nd: ownedAsset.digitalAsset.images
+  const indexerImagesUrl = indexerIcon?.scheme === 'ownedAsset.digitalAsset.images' ? indexerIcon.url : undefined;
+  debug.push(`2nd ownedAsset.digitalAsset.images: ${indexerImagesUrl ? '✓ ' + indexerImagesUrl : '(none)'}`);
+
+  // 3rd: api.Asset
+  const cachedImageUrl = _apiCache.has(imageCacheKey) ? _apiCache.get(imageCacheKey) : undefined;
+  const isCacheSettled = cachedImageUrl !== undefined;
+  debug.push(`3rd api.Asset: ${!isCacheSettled ? '(pending...)' : cachedImageUrl ? '✓ ' + cachedImageUrl : '(null)'}`);
+
+  // Select winner
+  if (indexerIconsUrl) {
+    debug.push(`selected: 1st`);
+    return { url: indexerIconsUrl, scheme: 'ownedAsset.digitalAsset.icons', debug };
+  }
+  if (indexerImagesUrl) {
+    debug.push(`selected: 2nd`);
+    return { url: indexerImagesUrl, scheme: 'ownedAsset.digitalAsset.images', debug };
+  }
+  if (!isCacheSettled) return undefined;
+  if (cachedImageUrl) {
+    debug.push(`selected: 3rd`);
+    return { url: cachedImageUrl, scheme: 'api.Asset', debug };
+  }
+
+  debug.push(`selected: none`);
+  return { url: '', scheme: 'none', debug };
+}
+
+// ─── NftChildItem ──────────────────────────────────────────
+
+function NftChildItem({ entry, collectionFallbackIcon, renderIcon, styles, handleSelectAsset }: {
+  entry: NftListEntry;
+  collectionFallbackIcon?: ResolvedIcon;
+  renderIcon: (icon: ResolvedIcon | undefined, fallbackEmoji: string) => React.ReactNode;
+  styles: Record<string, React.CSSProperties>;
+  handleSelectAsset: (type: 'token' | 'nft', addr: string, formattedTokenId?: string, e?: React.MouseEvent) => void;
+}) {
+  const resolved = useLsp8ChildImage({
+    contractAddress: entry.contractAddress,
+    formattedTokenId: entry.tokenId,
+    collectionFallbackIcon,
+  });
+
+  // undefined = still resolving → show empty placeholder (no emoji flash)
+  // url === '' = confirmed no image → show emoji
+  const displayIcon = resolved?.url ? resolved : undefined;
 
   return (
     <div style={{ ...styles.item, marginLeft: '12px' }}
       onClick={(e) => handleSelectAsset('nft', entry.contractAddress, entry.tokenId, e)}
       onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#edf2f7'; (e.currentTarget as HTMLElement).style.cursor = 'pointer'; }}
       onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = '#f7fafc'; }}>
-      {renderIcon(resolvedIcon, '🖼️')}
+      {renderIcon(displayIcon, '🖼️')}
       <div style={styles.itemInfo}>
         <span style={styles.itemName}>{entry.name}</span>
         <span style={styles.itemSymbol}>{entry.tokenId ? `#${shortenId(entry.tokenId, 16)}` : entry.symbol}</span>
@@ -293,14 +538,12 @@ export function AssetList({ address }: AssetListProps) {
   const [selectedAsset, setSelectedAsset] = useState<{ type: 'token' | 'nft'; address: string; formattedTokenId?: string } | null>(null);
   const [popupPosition, setPopupPosition] = useState<{ top: number; right: number }>({ top: 0, right: 0 });
   const [expandedCollections, setExpandedCollections] = useState<Set<string>>(new Set());
-  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['lsp8', 'lsp7']));
+  const [debugOpen, setDebugOpen] = useState(false);
 
   const toggleSection = useCallback((key: string) => {
     setExpandedSections(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
   }, []);
-
-  const [iconCache, setIconCache] = useState<Map<string, CachedIcon>>(new Map());
-  const fetchInFlight = useRef<Set<string>>(new Set());
 
   // ─── Data hooks ──────────────────────────────────────────
 
@@ -408,7 +651,7 @@ export function AssetList({ address }: AssetListProps) {
       const collName = collEntry?.digitalAsset?.name || filtered[0].name.replace(/ #\d+$/, '') || filtered[0].name;
       const collIcon = resolveDaIcon(collEntry) || undefined;
 
-      for (const e of filtered) { if (collIcon) e.collFallback = collIcon; }
+      for (const e of filtered) { if (collIcon) e.collectionFallbackIcon = collIcon; }
 
       result.push({ isCollection: true, id: addr, name: collName, symbol: collEntry?.digitalAsset?.symbol || entries[0].symbol, collectionIcon: collIcon, count: filtered.length, children: filtered });
     }
@@ -425,7 +668,7 @@ export function AssetList({ address }: AssetListProps) {
       lsp7Nfts.push({
         id: asset.digitalAssetAddress, name: asset.digitalAsset?.name || 'Unknown', symbol: asset.digitalAsset?.symbol || '???',
         tokenId: '', rawTokenId: '', contractAddress: asset.digitalAssetAddress,
-        collFallback: resolveDaIcon(asset) || undefined,
+        collectionFallbackIcon: resolveDaIcon(asset) || undefined,
         amount: asset.balance != null ? String(asset.balance) : '',
       });
     }
@@ -433,124 +676,92 @@ export function AssetList({ address }: AssetListProps) {
     return { nftTree: result.sort((a, b) => (a.name || '').localeCompare(b.name || '')), lsp7Nfts };
   }, [ownedTokens, ownedAssets, searchQuery]);
 
-  // ─── Lazy icon loading (Token / LSP7 API fallback) ───────
+  // ─── renderIcon ──────────────────────────────────────────
 
-  useEffect(() => {
-    const keysToFetch: { key: string; fetchFn: () => Promise<string | null>; scheme: string }[] = [];
+  const renderIcon = (icon: ResolvedIcon | undefined, fallbackEmoji: string) => (
+    <div style={icon ? styles.itemIconWithImg : styles.itemIcon}>
+      {icon ? <img src={icon.url} alt="" style={styles.itemIconImg} onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} /> : <span>{fallbackEmoji}</span>}
+    </div>
+  );
 
-    const addFetch = (key: string, fetchFn: () => Promise<string | null>, scheme: string) => {
-      if (fetchInFlight.current.has(key) || iconCache.has(key)) return;
-      fetchInFlight.current.add(key);
-      keysToFetch.push({ key, fetchFn, scheme });
-    };
-
-    for (const item of tokenItems) {
-      if (item.type === 'LYX' || item.indexerIcon || !item.contractAddress) continue;
-      addFetch(`token:${item.contractAddress.toLowerCase()}`, () => fetchAssetImage(item.contractAddress), 'api.asset.icons');
-    }
-
-    for (const item of lsp7Nfts) {
-      if (item.collFallback) continue;
-      addFetch(`coll:${item.id}`, () => fetchAssetImage(item.contractAddress), 'api.asset.icons');
-    }
-
-    for (const item of nftTree) {
-      if (!isColl(item) || item.collectionIcon) continue;
-      addFetch(`coll:${item.id.toLowerCase()}`, () => fetchAssetImage(item.id), 'api.asset.icons');
-    }
-
-    for (const { key, fetchFn, scheme } of keysToFetch) {
-      fetchWithLimit(fetchFn).then(url => {
-        fetchInFlight.current.delete(key);
-        // Only cache if we actually found an image
-        if (url) {
-          setIconCache(prev => { const n = new Map(prev); n.set(key, { url, scheme }); return n; });
-        }
-      }).catch(() => {
-        fetchInFlight.current.delete(key);
-        // Don't cache errors — allows retry on next render cycle
-      });
-    }
-  }, [tokenItems, lsp7Nfts, nftTree]); // NOTE: iconCache intentionally excluded to prevent infinite re-fetch
-
-  // ─── Collection header + batch image pre-fetch ─────────────
-
-  const getCachedIcon = useCallback((key: string, fallback?: CachedIcon): CachedIcon | undefined => {
-    const cached = iconCache.get(key);
-    // urlが空文字（APIで画像なし確認済み）の場合はフォールバックを使用
-    if (cached && cached.url) return cached;
-    return fallback;
-  }, [iconCache]);
+  // ─── Collection header (LSP8) ────────────────────────────
+  // useLsp8CollectionImage handles image resolution.
+  // LSP8 section starts expanded; individual collections start collapsed.
 
   function NftCollectionHeader({ coll }: { coll: NftCollEntry }) {
     const isExpanded = expandedCollections.has(coll.id.toLowerCase());
-    const cIcon = getCachedIcon(`coll:${coll.id.toLowerCase()}`, coll.collectionIcon);
-
-    // On collapse: clear in-flight (cache is preserved for next expand)
-    useEffect(() => {
-      if (isExpanded) return;
-      for (const child of coll.children) {
-        const hex = toTokenIdHex(child.tokenId);
-        const cKey = `${coll.id.toLowerCase()}-${hex}`;
-        _tokenImageInFlight.delete(cKey);
-      }
-    }, [isExpanded]);
-
-    // Individual fetch per child via rate-limiter (more reliable than batch _or)
-    useEffect(() => {
-      if (!isExpanded) return;
-
-      for (const child of coll.children) {
-        const hex = toTokenIdHex(child.tokenId);
-        const cKey = `${coll.id.toLowerCase()}-${hex}`;
-        if (_tokenImageCache.has(cKey) || _tokenImageInFlight.has(cKey)) continue;
-
-        _tokenImageInFlight.add(cKey);
-        fetchWithLimit(() => fetchTokenImage(coll.id, hex)).then(url => {
-          // Only cache positive results — don't cache false negatives
-          if (url) {
-            notifyCacheUpdate(cKey, url);
-          } else {
-            _tokenImageInFlight.delete(cKey);
-          }
-        }).catch(() => {
-          _tokenImageInFlight.delete(cKey);
-        });
-      }
-    }, [isExpanded, coll.id, coll.children]);
+    const { icon: collIcon } = useLsp8CollectionImage({
+      collectionAddress: coll.id,
+      collectionIcon: coll.collectionIcon,
+    });
 
     return (
       <div>
         <div style={{ ...styles.item, fontWeight: 600 }} onClick={() => toggleCollection(coll.id)}
           onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#edf2f7'; (e.currentTarget as HTMLElement).style.cursor = 'pointer'; }}
           onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = '#f7fafc'; }}>
-          {renderIcon(cIcon, '📂')}
+          {renderIcon(collIcon, '📂')}
           <div style={styles.itemInfo}><span style={styles.itemName}>{coll.name}</span><span style={styles.itemSymbol}>{coll.count} NFTs</span></div>
           <span style={{ ...styles.expandIcon, transform: isExpanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>▶</span>
         </div>
-        {isExpanded && <div style={{ paddingLeft: '8px' }}>
-          {coll.children.map(child => (
-            <NftChildItem
-              key={child.id}
-              entry={child}
-              collFallback={child.collFallback}
-              onClick={(e) => handleSelectAsset('nft', child.contractAddress, child.tokenId, e)}
-              renderIcon={renderIcon}
-              styles={styles}
-              shortenId={shortenId}
-              handleSelectAsset={handleSelectAsset}
-            />
-          ))}
-        </div>}
+        {isExpanded && (
+          <div style={{ paddingLeft: '8px' }}>
+            {coll.children.map(child => (
+              <NftChildItem
+                key={child.id}
+                entry={child}
+                collectionFallbackIcon={child.collectionFallbackIcon}
+                renderIcon={renderIcon}
+                styles={styles}
+                handleSelectAsset={handleSelectAsset}
+              />
+            ))}
+          </div>
+        )}
       </div>
     );
   }
 
-  const renderIcon = (icon: CachedIcon | undefined, fallbackEmoji: string) => (
-    <div style={icon ? styles.itemIconWithImg : styles.itemIcon}>
-      {icon ? <img src={icon.url} alt="" style={styles.itemIconImg} onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} /> : <span>{fallbackEmoji}</span>}
-    </div>
-  );
+  // ─── Token list item (sub-component for hook usage) ─────
+
+  function TokenListItem({ item }: { item: TokenItem }) {
+    const resolved = useTokenImage({
+      contractAddress: item.contractAddress,
+      indexerIcon: item.indexerIcon,
+    });
+    const displayIcon = resolved?.url ? resolved : undefined;
+    return (
+      <div style={styles.item}
+        onClick={(e) => handleSelectAsset('token' as const, item.contractAddress, undefined, e)}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#edf2f7'; (e.currentTarget as HTMLElement).style.cursor = 'pointer'; }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = '#f7fafc'; }}>
+        {renderIcon(displayIcon, '💎')}
+        <div style={styles.itemInfo}><span style={styles.itemName}>{item.name}</span><span style={styles.itemSymbol}>{item.symbol}</span></div>
+        <div style={styles.itemAmount}>{formatTokenAmount(item.amount || '0')} {item.symbol}</div>
+        <span style={styles.expandIcon}>›</span>
+      </div>
+    );
+  }
+
+  // ─── LSP7 Single NFT list item ───────────────────────────
+
+  function Lsp7SingleNftListItem({ item }: { item: NftListEntry }) {
+    const resolved = useLsp7SingleNftImage({
+      contractAddress: item.contractAddress,
+      indexerIcon: item.collectionFallbackIcon,
+    });
+    const displayIcon = resolved?.url ? resolved : undefined;
+    return (
+      <div style={styles.item}
+        onClick={(e) => handleSelectAsset('nft', item.contractAddress, item.tokenId, e)}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#edf2f7'; (e.currentTarget as HTMLElement).style.cursor = 'pointer'; }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = '#f7fafc'; }}>
+        {renderIcon(displayIcon, '🖼️')}
+        <div style={styles.itemInfo}><span style={styles.itemName}>{item.name}</span><span style={styles.itemSymbol}>{item.amount ? `${item.amount} ${item.symbol}` : item.symbol}</span></div>
+        <span style={styles.expandIcon}>›</span>
+      </div>
+    );
+  }
 
   // ─── Section header ──────────────────────────────────────
 
@@ -573,33 +784,35 @@ export function AssetList({ address }: AssetListProps) {
 
   const showPlaceholder = !targetAddress;
 
-  const renderTokenList = (items: TokenItem[], _listRef: React.RefObject<HTMLDivElement | null>) => (
-    <div style={styles.list} ref={_listRef}>
+  const renderTokenList = (items: TokenItem[], listRef: React.RefObject<HTMLDivElement | null>) => (
+    <div style={styles.list} ref={listRef}>
       {items.length === 0 ? <p style={styles.empty}>No tokens found</p> : items.map((item) => {
-        const icon = item.type === 'LYX' ? undefined : getCachedIcon(`token:${item.contractAddress?.toLowerCase() || item.id}`, item.indexerIcon);
-        return (
-          <div key={item.id} style={styles.item}
-            onClick={(e) => handleSelectAsset('token' as const, item.contractAddress, undefined, e)}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#edf2f7'; (e.currentTarget as HTMLElement).style.cursor = 'pointer'; }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = '#f7fafc'; }}>
-            {renderIcon(icon, '💎')}
-            <div style={styles.itemInfo}><span style={styles.itemName}>{item.name}</span><span style={styles.itemSymbol}>{item.symbol}</span></div>
-            <div style={styles.itemAmount}>{item.type === 'LYX' ? `${parseFloat(item.amount || '0').toFixed(4)} LYX` : `${formatTokenAmount(item.amount || '0')} ${item.symbol}`}</div>
-            <span style={styles.expandIcon}>›</span>
-          </div>
-        );
+        if (item.type === 'LYX') {
+          return (
+            <div key={item.id} style={styles.item}
+              onClick={(e) => handleSelectAsset('token' as const, item.contractAddress, undefined, e)}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#edf2f7'; (e.currentTarget as HTMLElement).style.cursor = 'pointer'; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = '#f7fafc'; }}>
+              {renderIcon(undefined, '💎')}
+              <div style={styles.itemInfo}><span style={styles.itemName}>{item.name}</span><span style={styles.itemSymbol}>{item.symbol}</span></div>
+              <div style={styles.itemAmount}>{parseFloat(item.amount || '0').toFixed(4)} LYX</div>
+              <span style={styles.expandIcon}>›</span>
+            </div>
+          );
+        }
+        return <TokenListItem key={item.id} item={item} />;
       })}
     </div>
   );
 
-  const renderNftTree = (tree: NftRenderItem[], singleNfts: NftListEntry[], _listRef: React.RefObject<HTMLDivElement | null>) => {
+  const renderNftTree = (tree: NftRenderItem[], singleNfts: NftListEntry[], listRef: React.RefObject<HTMLDivElement | null>) => {
     const hasCollections = tree.length > 0;
     const hasSingles = singleNfts.length > 0;
     if (!hasCollections && !hasSingles) return <p style={styles.empty}>No NFTs found</p>;
     const collTotal = (tree as NftCollEntry[]).reduce((s, c) => s + c.count, 0);
 
     return (
-      <div style={styles.list} ref={_listRef}>
+      <div style={styles.list} ref={listRef}>
         {hasCollections && (
           <>
             <SectionHeader label="Collection NFT" protocol="LSP8" count={collTotal} sectionKey="lsp8" />
@@ -612,19 +825,9 @@ export function AssetList({ address }: AssetListProps) {
         {hasSingles && (
           <>
             <SectionHeader label="Single NFT" protocol="LSP7" count={singleNfts.length} sectionKey="lsp7" />
-            {expandedSections.has('lsp7') && singleNfts.map((item) => {
-              const icon = getCachedIcon(`coll:${item.id}`, item.collFallback);
-              return (
-                <div key={item.id} style={styles.item}
-                  onClick={(e) => handleSelectAsset('nft', item.contractAddress, item.tokenId, e)}
-                  onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#edf2f7'; (e.currentTarget as HTMLElement).style.cursor = 'pointer'; }}
-                  onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = '#f7fafc'; }}>
-                  {renderIcon(icon, '🖼️')}
-                  <div style={styles.itemInfo}><span style={styles.itemName}>{item.name}</span><span style={styles.itemSymbol}>{item.amount ? `${item.amount} ${item.symbol}` : item.symbol}</span></div>
-                  <span style={styles.expandIcon}>›</span>
-                </div>
-              );
-            })}
+            {expandedSections.has('lsp7') && singleNfts.map((item) => (
+              <Lsp7SingleNftListItem key={item.id} item={item} />
+            ))}
           </>
         )}
       </div>
@@ -632,155 +835,87 @@ export function AssetList({ address }: AssetListProps) {
   };
 
   // ─── Popup ───────────────────────────────────────────────
+  // All three asset types now resolved via dedicated hooks.
+  // isLsp8Popup:    useLsp8ChildImage
+  // isTokenPopup:   useTokenImage
+  // isLsp7NftPopup: useLsp7SingleNftImage
 
-  const isLsp8Popup = selectedAsset?.type === 'nft' && !!selectedAsset?.formattedTokenId;
-  const popupNftAddr = isLsp8Popup ? selectedAsset?.address : undefined;
-  const popupNftTid = isLsp8Popup ? selectedAsset?.formattedTokenId : undefined;
+  const isLsp8Popup    = selectedAsset?.type === 'nft' && !!selectedAsset?.formattedTokenId;
+  const isTokenPopup   = selectedAsset?.type === 'token';
+  const isLsp7NftPopup = selectedAsset?.type === 'nft' && !selectedAsset?.formattedTokenId;
 
-  const { nft: popupNftData, isLoading: rawPopupNftLoading } = useNft(
+  const popupContractAddress = selectedAsset?.address ?? '';
+  const popupNftAddr = isLsp8Popup ? popupContractAddress : '';
+  const popupNftTid  = isLsp8Popup ? (selectedAsset?.formattedTokenId ?? '') : '';
+
+  // LSP8 popup image
+  const popupLsp8Image = useLsp8ChildImage(
     isLsp8Popup && popupNftAddr && popupNftTid
-      ? { address: popupNftAddr.toLowerCase(), formattedTokenId: popupNftTid,
-          include: { name: true, icons: true, images: true, description: true, links: true, attributes: true, category: true, collection: { baseUri: true, icons: true } } }
-      : ({ address: '', formattedTokenId: '' } as any)
+      ? {
+          contractAddress: popupNftAddr,
+          formattedTokenId: popupNftTid,
+          collectionFallbackIcon: resolveDaIcon(
+            (ownedAssets || []).find(a => a.digitalAssetAddress?.toLowerCase() === popupNftAddr.toLowerCase())
+          ) ?? undefined,
+          nftIndexerData: (selectedOwnedData as any)?.nft,
+        }
+      : { contractAddress: '', formattedTokenId: 'skip' }
   );
 
-  const popupAssetKey = `${selectedAsset?.type}:${selectedAsset?.address}:${selectedAsset?.formattedTokenId || ''}`;
-  const popupPrevKey = useRef('');
+  // Token popup image
+  const popupTokenImage = useTokenImage(
+    isTokenPopup && popupContractAddress
+      ? {
+          contractAddress: popupContractAddress,
+          indexerIcon: resolveDaIcon(selectedOwnedData) ?? undefined,
+        }
+      : { contractAddress: 'skip' }
+  );
 
-  // Timeout: if useNft takes >5s, stop waiting and proceed to API fallback
-  const [popupNftTimedOut, setPopupNftTimedOut] = useState(false);
-  useEffect(() => {
-    if (!isLsp8Popup || !rawPopupNftLoading) { setPopupNftTimedOut(false); return; }
-    const t = setTimeout(() => setPopupNftTimedOut(true), 5000);
-    return () => clearTimeout(t);
-  }, [isLsp8Popup, rawPopupNftLoading, popupAssetKey]);
-  const popupNftLoading = isLsp8Popup ? (rawPopupNftLoading && !popupNftTimedOut) : false;
+  // LSP7 Single NFT popup image
+  const popupLsp7NftImage = useLsp7SingleNftImage(
+    isLsp7NftPopup && popupContractAddress
+      ? {
+          contractAddress: popupContractAddress,
+          indexerIcon: resolveDaIcon(selectedOwnedData) ?? undefined,
+        }
+      : { contractAddress: 'skip' }
+  );
 
-  const [popupApiImg, setPopupApiImg] = useState<string | null>(null);
-  const [popupApiScheme, setPopupApiScheme] = useState<string | null>(null);
-  const [popupApiLoading, setPopupApiLoading] = useState(false);
-  const [popupApiDone, setPopupApiDone] = useState(false);
-
-  useEffect(() => {
-    if (popupPrevKey.current !== popupAssetKey) {
-      popupPrevKey.current = popupAssetKey;
-      setPopupApiImg(null); setPopupApiScheme(null); setPopupApiLoading(false);
-      setPopupApiDone(false);
-    }
-  }, [popupAssetKey]);
-
-  // API fallback — LSP8
-  useEffect(() => {
-    if (!isLsp8Popup) return;
-    if (popupPrevKey.current !== popupAssetKey) return;
-    if (popupNftLoading) return;
-    const da = popupNftData as any;
-    if (da?.images) {
-      const imgs = flattenImages(da);
-      if (imgs.length > 0) { setPopupApiDone(true); return; }
-    }
-    if (da?.icons?.[0]?.url) { setPopupApiDone(true); return; }
-
-    const addr = da?.address || selectedOwnedData?.digitalAssetAddress || '';
-    if (!addr || !popupNftTid) return;
-    let cancelled = false;
-    setPopupApiLoading(true);
-    const hex = toTokenIdHex(popupNftTid);
-    (async () => {
-      // Direct fetch -- bypass rate limiter queue so popup isn't blocked by list batch
-      try {
-        const tokenUrl = await fetchTokenImage(addr, hex);
-        if (!cancelled && tokenUrl) { setPopupApiImg(tokenUrl); setPopupApiScheme('api.token.images'); setPopupApiDone(true); setPopupApiLoading(false); return; }
-      } catch { /* continue to asset fallback */ }
-      try {
-        const assetUrl = await fetchAssetImage(addr);
-        if (!cancelled && assetUrl) { setPopupApiImg(assetUrl); setPopupApiScheme('api.asset.icons'); }
-      } catch { /* no image */ }
-      if (!cancelled) { setPopupApiDone(true); setPopupApiLoading(false); }
-    })();
-    return () => { cancelled = true; };
-  }, [isLsp8Popup, popupNftData, popupNftLoading, popupAssetKey, selectedOwnedData, popupNftTid]);
-
-  // API fallback — Token / LSP7
-  useEffect(() => {
-    if (isLsp8Popup) return;
-    if (popupPrevKey.current !== popupAssetKey) return;
-    if (!selectedAsset) return;
-    const da = selectedOwnedData?.digitalAsset as any;
-    if (da?.icons?.[0]?.url || da?.images?.[0]?.url) { setPopupApiDone(true); return; }
-    const addr = selectedOwnedData?.digitalAssetAddress || '';
-    if (!addr) return;
-    let cancelled = false;
-    setPopupApiLoading(true);
-    // Direct fetch -- bypass rate limiter queue
-    fetchAssetImage(addr).then(url => {
-      if (!cancelled && url) { setPopupApiImg(url); setPopupApiScheme('api.asset.icons'); }
-      if (!cancelled) { setPopupApiDone(true); setPopupApiLoading(false); }
-    }).catch(() => {
-      if (!cancelled) { setPopupApiDone(true); setPopupApiLoading(false); }
-    });
-    return () => { cancelled = true; };
-  }, [isLsp8Popup, popupAssetKey, selectedAsset, selectedOwnedData]);
-
-  // Popup image resolution — same chain as NftChildItem
+  // Unified popup image — picks the active hook result
   const popupImage = useMemo((): { url: string | null; scheme: string } => {
-    if (isLsp8Popup) {
-      if (popupNftLoading) return { url: null, scheme: 'loading' };
-      const da = popupNftData as any;
-
-      // 1st: useNft.images
-      if (da?.images) {
-        const imgs = flattenImages(da);
-        if (imgs.length > 0) return { url: toGatewayUrl(imgs[0])!, scheme: 'useNft.images' };
-      }
-
-      // 2nd: api.Token (wait for it if not done)
-      if (!popupApiDone) return { url: null, scheme: 'loading' };
-      if (popupApiImg) return { url: popupApiImg, scheme: popupApiScheme || 'api' };
-
-      // 3rd: useNft.icons (fallback after API exhausted)
-      if (da?.icons?.[0]?.url) return { url: toGatewayUrl(da.icons[0].url)!, scheme: 'useNft.icons' };
-      if (da?.collection?.icons?.[0]?.url) return { url: toGatewayUrl(da.collection.icons[0].url)!, scheme: 'useNft.collection.icons' };
-
-      // 4th: ownedToken indexer
-      const nftIdx = (selectedOwnedData as any)?.nft;
-      if (nftIdx?.icons?.[0]?.url) return { url: toGatewayUrl(nftIdx.icons[0].url)!, scheme: 'ownedToken.nft.icons' };
-      if (nftIdx?.images?.[0]?.url) return { url: toGatewayUrl(nftIdx.images[0].url)!, scheme: 'ownedToken.nft.images' };
-    }
-
-    // Token / LSP7
-    const da = selectedOwnedData?.digitalAsset as any;
-    if (da?.icons?.[0]?.url) return { url: toGatewayUrl(da.icons[0].url)!, scheme: 'ownedAsset.digitalAsset.icons' };
-    if (da?.images?.[0]?.url) return { url: toGatewayUrl(da.images[0].url)!, scheme: 'ownedAsset.digitalAsset.images' };
-    if (da?.url?.startsWith('ipfs://')) return { url: toGatewayUrl(da.url)!, scheme: 'ownedAsset.digitalAsset.url' };
-    if (popupApiImg) return { url: popupApiImg, scheme: popupApiScheme || 'api' };
-    if (popupApiLoading) return { url: null, scheme: 'loading' };
+    const activeResolved = isLsp8Popup ? popupLsp8Image
+      : isTokenPopup   ? popupTokenImage
+      : isLsp7NftPopup ? popupLsp7NftImage
+      : undefined;
+    if (activeResolved === undefined) return { url: null, scheme: 'loading' };
+    if (activeResolved.url) return { url: activeResolved.url, scheme: activeResolved.scheme };
     return { url: null, scheme: 'none' };
-  }, [isLsp8Popup, popupNftData, popupNftLoading, popupApiImg, popupApiScheme, popupApiLoading, popupApiDone, selectedOwnedData]);
+  }, [isLsp8Popup, isTokenPopup, isLsp7NftPopup, popupLsp8Image, popupTokenImage, popupLsp7NftImage]);
 
-  // Debug info
+  // Unified debug panel
   const popupDebug = useMemo(() => {
-    const p: string[] = [];
-    if (isLsp8Popup) {
-      p.push(`[LSP8] selected: ${popupImage.scheme}`);
-      const da = popupNftData as any;
-      const imgUrls = da?.images ? flattenImages(da) : [];
-      p.push(`1st useNft.images: ${imgUrls.length > 0 ? '✓ ' + imgUrls[0] : '(empty)'}`);
-      p.push(`2nd api.token: ${popupApiLoading ? '⏳' : popupApiImg ? '✓ ' + popupApiImg : '(empty)'} [${popupApiScheme || '-'}]`);
-      p.push(`3rd useNft.icons: ${da?.icons?.[0]?.url || '(empty)'}`);
-      p.push(`4th useNft.coll.icons: ${da?.collection?.icons?.[0]?.url || '(empty)'}`);
-      const nftIdx = (selectedOwnedData as any)?.nft;
-      p.push(`5th idx.nft: ${nftIdx?.icons?.[0]?.url || nftIdx?.images?.[0]?.url || '(empty)'}`);
-      p.push(`final: ${popupImage.url || '(null)'}`);
-    } else {
-      p.push(`[Token/LSP7] selected: ${popupImage.scheme}`);
-      const da = selectedOwnedData?.digitalAsset as any;
-      p.push(`1st idx.da: ${da?.icons?.[0]?.url || da?.images?.[0]?.url || da?.url || '(empty)'}`);
-      p.push(`2nd api: ${popupApiLoading ? '⏳' : popupApiImg ? '✓ ' + popupApiImg : '(empty)'} [${popupApiScheme || '-'}]`);
-      p.push(`final: ${popupImage.url || '(null)'}`);
-    }
-    return p.join('\n');
-  }, [isLsp8Popup, popupImage, popupNftData, selectedOwnedData, popupApiLoading, popupApiImg, popupApiScheme]);
+    const assetType = isLsp8Popup ? '[LSP8]' : isTokenPopup ? '[Token]' : '[LSP7 Single NFT]';
+    const activeResolved = isLsp8Popup ? popupLsp8Image
+      : isTokenPopup   ? popupTokenImage
+      : isLsp7NftPopup ? popupLsp7NftImage
+      : undefined;
+    const debugLines = activeResolved?.debug ?? ['(resolving...)'];
+    return [
+      `${assetType} selected: ${popupImage.scheme}`,
+      ...debugLines,
+      `final: ${popupImage.url ?? '(null)'}`,
+    ].join('\n');
+  }, [isLsp8Popup, isTokenPopup, isLsp7NftPopup, popupLsp8Image, popupTokenImage, popupLsp7NftImage, popupImage]);
+
+  // useNft for popup text metadata (name, description, links, attributes)
+  // Image resolution is handled separately by useLsp8ChildImage above.
+  const { nft: popupNftData } = useNft(
+    isLsp8Popup && popupNftAddr && popupNftTid
+      ? { address: popupNftAddr.toLowerCase(), formattedTokenId: popupNftTid,
+          include: { name: true, description: true, links: true, attributes: true } }
+      : ({ address: '', formattedTokenId: '' } as any)
+  );
 
   const popupDa = selectedOwnedData?.digitalAsset;
   const popupDisplayName = isLsp8Popup
@@ -814,7 +949,13 @@ export function AssetList({ address }: AssetListProps) {
           <div style={styles.popup} onClick={(e) => e.stopPropagation()}>
             <button style={styles.closeButton} onClick={() => setSelectedAsset(null)}>×</button>
             <div style={debugStyles.container}>
-              <details style={debugStyles.details}><summary style={debugStyles.summary}>🔍 Debug: Image Resolution</summary><div style={debugStyles.content}>{popupDebug}</div></details>
+              <button
+                style={{ ...debugStyles.summary, width: '100%', textAlign: 'left', border: 'none', cursor: 'pointer' }}
+                onClick={(e) => { e.stopPropagation(); setDebugOpen(open => !open); }}
+              >
+                🔍 Debug: Image Resolution {debugOpen ? '▲' : '▼'}
+              </button>
+              {debugOpen && <div style={debugStyles.content}>{popupDebug}</div>}
             </div>
             <div style={styles.popupImageWrapper}>
               {popupImage.scheme === 'loading' ? <span style={{ color: '#a0aec0', fontSize: '0.85rem' }}>⏳ Loading...</span>
@@ -872,9 +1013,8 @@ const formatTokenAmount = (amount: string) => {
 // ─── Styles ──────────────────────────────────────────────────
 
 const debugStyles: Record<string, React.CSSProperties> = {
-  container: { marginBottom: '8px' },
-  details: { fontSize: '0.58rem', color: '#6b7280', borderRadius: '6px', border: '1px solid #e5e7eb', overflow: 'hidden' },
-  summary: { padding: '4px 8px', background: '#f9fafb', cursor: 'pointer', fontWeight: 600, fontSize: '0.65rem', color: '#374151', userSelect: 'none' },
+  container: { marginBottom: '8px', fontSize: '0.58rem', color: '#6b7280', borderRadius: '6px', border: '1px solid #e5e7eb', overflow: 'hidden' },
+  summary: { padding: '4px 8px', background: '#f9fafb', fontWeight: 600, fontSize: '0.65rem', color: '#374151', userSelect: 'none' },
   content: { padding: '6px 8px', background: '#fef2f2', whiteSpace: 'pre-wrap', wordBreak: 'break-all', lineHeight: '1.4', color: '#e74c3c', fontFamily: 'monospace', fontSize: '0.58rem' },
 };
 
