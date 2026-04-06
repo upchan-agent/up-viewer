@@ -540,6 +540,23 @@ export function AssetList({ address }: AssetListProps) {
   const [expandedCollections, setExpandedCollections] = useState<Set<string>>(new Set());
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['lsp8', 'lsp7']));
   const [debugOpen, setDebugOpen] = useState(false);
+  const [nftFilter, setNftFilter] = useState<'all' | 'lsp8' | 'lsp7'>('all');
+  const nftFilterScrollTop = useRef<Record<string, number>>({ all: 0, lsp8: 0, lsp7: 0 });
+
+  const handleNftFilterChange = useCallback((next: 'all' | 'lsp8' | 'lsp7') => {
+    // Save current scroll position before switching
+    if (nftListRef.current) {
+      nftFilterScrollTop.current[nftFilter] = nftListRef.current.scrollTop;
+    }
+    setNftFilter(next);
+  }, [nftFilter]);
+
+  // Restore scroll position after filter switch completes
+  useEffect(() => {
+    if (nftListRef.current) {
+      nftListRef.current.scrollTop = nftFilterScrollTop.current[nftFilter] ?? 0;
+    }
+  }, [nftFilter]);
 
   const toggleSection = useCallback((key: string) => {
     setExpandedSections(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
@@ -673,7 +690,7 @@ export function AssetList({ address }: AssetListProps) {
       });
     }
 
-    return { nftTree: result.sort((a, b) => (a.name || '').localeCompare(b.name || '')), lsp7Nfts };
+    return { nftTree: result.sort((a, b) => (a.name || '').localeCompare(b.name || '')), lsp7Nfts: lsp7Nfts.sort((a, b) => (a.name || '').localeCompare(b.name || '')) };
   }, [ownedTokens, ownedAssets, searchQuery]);
 
   // ─── renderIcon ──────────────────────────────────────────
@@ -806,16 +823,24 @@ export function AssetList({ address }: AssetListProps) {
   );
 
   const renderNftTree = (tree: NftRenderItem[], singleNfts: NftListEntry[], listRef: React.RefObject<HTMLDivElement | null>) => {
-    const hasCollections = tree.length > 0;
-    const hasSingles = singleNfts.length > 0;
+    const showLsp8 = nftFilter !== 'lsp7';
+    const showLsp7 = nftFilter !== 'lsp8';
+    const hasCollections = tree.length > 0 && showLsp8;
+    const hasSingles = singleNfts.length > 0 && showLsp7;
     if (!hasCollections && !hasSingles) return <p style={styles.empty}>No NFTs found</p>;
     const collTotal = (tree as NftCollEntry[]).reduce((s, c) => s + c.count, 0);
+
+    const stickyHeader = (label: string, protocol: string, count: number, sectionKey: string) => (
+      <div style={{ position: 'sticky', top: 0, zIndex: 1, background: '#f8fafc', marginBottom: '2px' }}>
+        <SectionHeader label={label} protocol={protocol} count={count} sectionKey={sectionKey} />
+      </div>
+    );
 
     return (
       <div style={styles.list} ref={listRef}>
         {hasCollections && (
           <>
-            <SectionHeader label="Collection NFT" protocol="LSP8" count={collTotal} sectionKey="lsp8" />
+            {stickyHeader('Collection NFT', 'LSP8', collTotal, 'lsp8')}
             {expandedSections.has('lsp8') && tree.map((item) => (
               <div key={item.id}><NftCollectionHeader coll={item as NftCollEntry} /></div>
             ))}
@@ -824,7 +849,7 @@ export function AssetList({ address }: AssetListProps) {
         {hasCollections && hasSingles && <div style={{ height: '1px', background: '#e2e8f0', margin: '8px 0' }} />}
         {hasSingles && (
           <>
-            <SectionHeader label="Single NFT" protocol="LSP7" count={singleNfts.length} sectionKey="lsp7" />
+            {stickyHeader('Single NFT', 'LSP7', singleNfts.length, 'lsp7')}
             {expandedSections.has('lsp7') && singleNfts.map((item) => (
               <Lsp7SingleNftListItem key={item.id} item={item} />
             ))}
@@ -937,7 +962,35 @@ export function AssetList({ address }: AssetListProps) {
             <button style={{ ...styles.tab, ...(activeTab === 'tokens' ? styles.tabActive : {}) }} onClick={() => setActiveTab('tokens')}>🪙 <span style={styles.tabCount}>{tokenItems.length}</span> Tokens</button>
             <button style={{ ...styles.tab, ...(activeTab === 'nfts' ? styles.tabActive : {}) }} onClick={() => setActiveTab('nfts')}>🖼️ <span style={styles.tabCount}>{(nftTree as NftCollEntry[]).reduce((s, i) => s + i.count, 0) + lsp7Nfts.length}</span> NFTs</button>
           </div>
-          <input type="text" placeholder={activeTab === 'tokens' ? '🔍 Search tokens...' : '🔍 Search NFTs...'} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} style={styles.searchInput} />
+          {/* Search bar — NFTs tab shows inline filter toggle on the right */}
+          <div style={{ display: 'flex', gap: '6px', marginBottom: '8px', alignItems: 'center' }}>
+            <input
+              type="text"
+              placeholder={activeTab === 'tokens' ? '🔍 Search tokens...' : '🔍 Search NFTs...'}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              style={{ ...styles.searchInput, marginBottom: 0, flex: 1 }}
+            />
+            {activeTab === 'nfts' && (
+              <div style={{ display: 'flex', gap: '3px', flexShrink: 0 }}>
+                {(['all', 'lsp8', 'lsp7'] as const).map(f => (
+                  <button
+                    key={f}
+                    onClick={() => handleNftFilterChange(f)}
+                    style={{
+                      padding: '6px 8px', border: 'none', borderRadius: '7px', cursor: 'pointer',
+                      fontSize: '0.7rem', fontWeight: '600', lineHeight: 1,
+                      background: nftFilter === f ? 'linear-gradient(135deg,#667eea 0%,#764ba2 100%)' : '#f7fafc',
+                      color: nftFilter === f ? '#fff' : '#718096',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    {f === 'all' ? 'All' : f.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <div style={{ position: 'relative' }}>
             <div style={{ display: activeTab === 'tokens' ? 'block' : 'none' }}>{renderTokenList(tokenItems, tokenListRef)}</div>
             <div style={{ display: activeTab === 'nfts' ? 'block' : 'none' }}>{renderNftTree(nftTree, lsp7Nfts, nftListRef)}</div>
