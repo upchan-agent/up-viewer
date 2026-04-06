@@ -5,11 +5,14 @@ import { ProfileCard } from '@/components/ProfileCard';
 import { SocialGraph } from '@/components/SocialGraph';
 import { AssetList } from '@/components/AssetList';
 import { ActivityList } from '@/components/ActivityList';
-import { useState } from 'react';
+import { useState, Suspense } from 'react';
+import { useSearchParams } from 'next/navigation';
 
 type TabType = 'assets' | 'social' | 'activity';
 
-function ViewerContent() {
+function ViewerInner() {
+  const searchParams = useSearchParams();
+  const urlAddress = searchParams.get('address') as `0x${string}` | null;
   const [activeTab, setActiveTab] = useState<TabType>('assets');
 
   return (
@@ -22,7 +25,7 @@ function ViewerContent() {
       </header>
 
       <div style={styles.content}>
-        <ProfileCard />
+        <ProfileCard address={urlAddress || undefined} />
 
         <div style={styles.tabs}>
           <button
@@ -45,7 +48,7 @@ function ViewerContent() {
           </button>
         </div>
 
-        {activeTab === 'assets' && <AssetList />}
+        {activeTab === 'assets' && <AssetList address={urlAddress || undefined} />}
         {activeTab === 'social' && <SocialGraph />}
         {activeTab === 'activity' && <ActivityList />}
       </div>
@@ -63,6 +66,14 @@ function ViewerContent() {
         </a>
       </footer>
     </div>
+  );
+}
+
+function ViewerContent() {
+  return (
+    <Suspense fallback={<div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: '#fff' }}>Loading...</div>}>
+      <ViewerInner />
+    </Suspense>
   );
 }
 

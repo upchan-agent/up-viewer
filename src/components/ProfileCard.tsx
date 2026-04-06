@@ -10,7 +10,7 @@ const getProfileImageUrl = (profile: { profileImage?: { url: string }[] | null }
   return toGatewayUrl(profile.profileImage[0].url);
 };
 
-export function ProfileCard() {
+export function ProfileCard({ address: propAddress }: { address?: string }) {
   const {
     displayAddress,
     isMiniApp,
@@ -22,8 +22,11 @@ export function ProfileCard() {
     isDetecting,
   } = useUpProvider();
 
+  // URL parameter takes priority over wallet connection
+  const activeAddress = propAddress || displayAddress;
+
   const { profile, isLoading: isProfileLoading } = useProfile({
-    address: displayAddress || '',
+    address: activeAddress || '',
   });
 
   // Switch account handler (standalone mode only)
@@ -37,7 +40,7 @@ export function ProfileCard() {
   };
 
   // Profile state
-  const hasProfile = displayAddress && !isProfileLoading && profile;
+  const hasProfile = activeAddress && !isProfileLoading && profile;
 
   // Get profile info
   const name = profile?.name || 'Unknown';
@@ -100,7 +103,7 @@ export function ProfileCard() {
       </div>
 
       {/* Profile Section */}
-      {!displayAddress ? (
+      {!activeAddress ? (
         // No address at all: show placeholder
         <div style={styles.placeholderSection}>
           <span style={styles.placeholderIcon}>👤</span>
@@ -122,7 +125,7 @@ export function ProfileCard() {
           )}
           <div style={styles.info}>
             <h2 style={styles.name}>{name}</h2>
-            <p style={styles.address}>{displayAddress}</p>
+            <p style={styles.address}>{activeAddress}</p>
           </div>
         </div>
       )}
