@@ -33,6 +33,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     background: 'rgba(255, 255, 255, 0.95)',
     borderRadius: '16px',
     boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
+    minHeight: '600px',
   },
   title: {
     margin: '0 0 8px 0',

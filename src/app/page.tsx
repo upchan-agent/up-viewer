@@ -97,16 +97,16 @@ function ViewerInner() {
           </button>
         </div>
 
-        {/* Keep all tabs mounted to preserve state and scroll position.
-            display:none hides inactive tabs without unmounting them. */}
-        <div style={{ display: activeTab === 'assets' ? 'block' : 'none' }}>
-          <AssetList address={activeAddress} />
-        </div>
-        <div style={{ display: activeTab === 'social' ? 'block' : 'none' }}>
-          <SocialGraph address={activeAddress} />
-        </div>
-        <div style={{ display: activeTab === 'activity' ? 'block' : 'none' }}>
-          <ActivityList address={activeAddress} />
+        <div style={styles.tabPanel}>
+          <div style={{ display: activeTab === 'assets' ? 'block' : 'none' }}>
+            <AssetList address={activeAddress} />
+          </div>
+          <div style={{ display: activeTab === 'social' ? 'block' : 'none' }}>
+            <SocialGraph address={activeAddress} />
+          </div>
+          <div style={{ display: activeTab === 'activity' ? 'block' : 'none' }}>
+            <ActivityList address={activeAddress} />
+          </div>
         </div>
       </div>
 
@@ -227,6 +227,10 @@ const styles: { [key: string]: React.CSSProperties } = {
   tabActive: {
     background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
     color: '#ffffff',
+  },
+  tabPanel: {
+    minHeight: '600px',
+    position: 'relative',
   },
   footer: {
     marginTop: '6px',

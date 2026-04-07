@@ -3,11 +3,8 @@
 import { useUpProvider } from '@/lib/up-provider';
 import { useProfile } from '@lsp-indexer/react';
 import { toGatewayUrl } from '@/lib/utils';
-
-const getProfileImageUrl = (profile: { profileImage?: { url: string }[] | null } | null): string | undefined => {
-  if (!profile?.profileImage?.[0]?.url) return undefined;
-  return toGatewayUrl(profile.profileImage[0].url);
-};
+import { useResolvedProfileImage } from '@/lib/profile-image-cache';
+import { useState, useEffect } from 'react';
 
 export function ProfileCard({
   address: propAddress,
@@ -37,6 +34,22 @@ export function ProfileCard({
     address: activeAddress || '',
   });
 
+  // ─── Profile image resolution (same as SocialGraph) ──────
+  // Priority: 1. useProfile.profileImage  2. erc725 fallback  3. useProfile.avatar
+  const indexerProfileUrl = toGatewayUrl(profile?.profileImage?.[0]?.url ?? '') ?? undefined;
+  const indexerBgUrl = toGatewayUrl(profile?.backgroundImage?.[0]?.url ?? '') ?? undefined;
+  const indexerAvatarUrl = toGatewayUrl(profile?.avatar?.[0]?.url ?? '') ?? undefined;
+
+  const resolved = useResolvedProfileImage({
+    address: activeAddress || '',
+    indexerImageUrl: indexerProfileUrl,
+    indexerBackgroundImageUrl: indexerBgUrl,
+    indexerAvatarUrl,
+  });
+
+  const profileImageUrl = resolved?.profileImageUrl ?? undefined;
+  const backgroundImageUrl = resolved?.backgroundImageUrl ?? undefined;
+
   const handleSwitch = async () => {
     if (!provider) return;
     try {
@@ -49,22 +62,36 @@ export function ProfileCard({
   const hasProfile = activeAddress && !isProfileLoading && profile;
   const name = profile?.name || 'Unknown';
   const initials = name.charAt(0).toUpperCase();
-  const profileImageUrl = getProfileImageUrl(profile);
+  const isLoading = isProfileLoading || resolved === undefined;
 
   return (
     <div style={styles.card}>
+      {/* Background image — absolute positioned, card size unchanged */}
+      {!isLoading && backgroundImageUrl && (
+        <div style={styles.bgWrapper}>
+          <img
+            src={backgroundImageUrl}
+            alt=""
+            style={styles.bgImg}
+            onLoad={(e) => { (e.target as HTMLImageElement).style.opacity = '1'; }}
+            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+          />
+        </div>
+      )}
+
       {/* Connection Status Section — always renders */}
       <div style={styles.connectionSection}>
-
         {/* ── View Mode: override all normal states ── */}
         {isViewMode && onExitViewMode && (
           <div style={styles.viewModeRow}>
             <span style={styles.viewModeIcon}>👀</span>
             <span style={styles.viewModeText}>View mode</span>
-            <button onClick={onExitViewMode} style={styles.exitButton}>
-              Exit
-            </button>
           </div>
+        )}
+        {isViewMode && onExitViewMode && (
+          <button onClick={onExitViewMode} style={{ ...styles.exitButton, paddingRight: '6px' }} aria-label="Exit view mode">
+            Exit
+          </button>
         )}
 
         {/* ── Normal states (hidden in view mode) ── */}
@@ -76,7 +103,6 @@ export function ProfileCard({
                 <div style={styles.skeletonText} />
               </div>
             )}
-
             {viewMode === 'wallet' && (
               <div style={styles.connectedRow}>
                 <span style={styles.connectedIcon}>🟢</span>
@@ -90,14 +116,12 @@ export function ProfileCard({
                 )}
               </div>
             )}
-
             {viewMode === 'grid' && (
               <div style={styles.viewingRow}>
                 <span style={styles.viewingIcon}>👀</span>
                 <span style={styles.viewingText}>Viewing via Grid</span>
               </div>
             )}
-
             {!isDetecting && viewMode === 'none' && isMiniApp === false && (
               <div style={styles.disconnectedRow}>
                 <span style={styles.disconnectedIcon}>🔌</span>
@@ -138,8 +162,13 @@ export function ProfileCard({
         </div>
       ) : (
         <div style={styles.profileSection}>
-          {profileImageUrl ? (
-            <img src={profileImageUrl} alt={name} style={styles.avatar} />
+          {isLoading ? (
+            <div style={styles.avatarPlaceholder}>
+              <span style={styles.loadingSpinner}>⏳</span>
+            </div>
+          ) : profileImageUrl ? (
+            <img src={profileImageUrl} alt={name} style={styles.avatar}
+              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
           ) : (
             <div style={styles.avatarPlaceholder}>{initials}</div>
           )}
@@ -159,23 +188,42 @@ const styles: { [key: string]: React.CSSProperties } = {
     background: 'rgba(255, 255, 255, 0.95)',
     borderRadius: '16px',
     boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  bgWrapper: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: '100%',
+    overflow: 'hidden',
+    borderRadius: '16px',
+    zIndex: 0,
+  },
+  bgImg: {
+    width: '100%',
+    height: '100%',
+    objectFit: 'cover',
+    objectPosition: 'center',
+    opacity: 0,
+    transition: 'opacity 0.3s ease',
   },
   connectionSection: {
-    marginBottom: '8px',
-    minHeight: '20px',
     position: 'relative',
+    zIndex: 1,
+    display: 'flex',
+    alignItems: 'center',
+    minHeight: '18px',
   },
   /* ─── View Mode ─── */
   viewModeRow: {
     display: 'flex',
     alignItems: 'center',
     gap: '6px',
-    minHeight: '20px',
+    height: '18px',
   },
-  viewModeIcon: {
-    fontSize: '0.9rem',
-    flexShrink: 0,
-  },
+  viewModeIcon: { fontSize: '0.9rem', flexShrink: 0 },
   viewModeText: {
     fontSize: '0.75rem',
     color: '#3182ce',
@@ -183,8 +231,14 @@ const styles: { [key: string]: React.CSSProperties } = {
     whiteSpace: 'nowrap',
   },
   exitButton: {
-    marginLeft: 'auto',
-    padding: '2px 8px',
+    position: 'absolute',
+    right: '4px',
+    top: '0',
+    height: '18px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '0 6px',
     background: '#fed7d7',
     border: 'none',
     borderRadius: '6px',
@@ -193,31 +247,39 @@ const styles: { [key: string]: React.CSSProperties } = {
     fontWeight: '600',
     cursor: 'pointer',
     flexShrink: 0,
+    zIndex: 2,
+    boxSizing: 'border-box',
   },
-  /* ─── Search Button (always visible, fixed right) ─── */
+  /* ─── Search Button ─── */
   searchButtonFixed: {
     position: 'absolute',
-    right: '0',
+    right: '4px',
     top: '0',
-    padding: '2px 6px',
+    width: '28px',
+    height: '18px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 0,
     background: 'rgba(255,255,255,0.8)',
     border: '1px solid #e2e8f0',
     borderRadius: '6px',
     fontSize: '0.85rem',
     cursor: 'pointer',
     flexShrink: 0,
-    lineHeight: 1,
+    zIndex: 2,
+    boxSizing: 'border-box',
   },
   /* ─── Skeleton ─── */
   skeletonRow: {
     display: 'flex',
     alignItems: 'center',
     gap: '8px',
-    minHeight: '20px',
+    height: '18px',
   },
   skeletonIcon: {
-    width: '16px',
-    height: '16px',
+    width: '18px',
+    height: '18px',
     borderRadius: '50%',
     background: 'linear-gradient(90deg, #e0e0e0 25%, #d0d0d0 50%, #e0e0e0 75%)',
     backgroundSize: '200% 100%',
@@ -237,12 +299,9 @@ const styles: { [key: string]: React.CSSProperties } = {
     display: 'flex',
     alignItems: 'center',
     gap: '6px',
-    minHeight: '20px',
+    height: '18px',
   },
-  connectedIcon: {
-    fontSize: '0.9rem',
-    flexShrink: 0,
-  },
+  connectedIcon: { fontSize: '0.9rem', flexShrink: 0 },
   connectedText: {
     fontSize: '0.75rem',
     color: '#48bb78',
@@ -251,8 +310,12 @@ const styles: { [key: string]: React.CSSProperties } = {
   },
   switchButton: {
     marginLeft: 'auto',
-    marginRight: '28px',
-    padding: '4px 10px',
+    marginRight: '34px',
+    height: '18px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '2px 8px',
     background: '#e2e8f0',
     border: 'none',
     borderRadius: '6px',
@@ -261,18 +324,16 @@ const styles: { [key: string]: React.CSSProperties } = {
     fontWeight: '600',
     cursor: 'pointer',
     flexShrink: 0,
+    boxSizing: 'border-box',
   },
   /* ─── Grid ─── */
   viewingRow: {
     display: 'flex',
     alignItems: 'center',
     gap: '6px',
-    minHeight: '20px',
+    height: '18px',
   },
-  viewingIcon: {
-    fontSize: '0.9rem',
-    flexShrink: 0,
-  },
+  viewingIcon: { fontSize: '0.9rem', flexShrink: 0 },
   viewingText: {
     fontSize: '0.75rem',
     color: '#805ad5',
@@ -284,20 +345,21 @@ const styles: { [key: string]: React.CSSProperties } = {
     display: 'flex',
     alignItems: 'center',
     gap: '6px',
-    minHeight: '20px',
+    height: '18px',
   },
-  disconnectedIcon: {
-    fontSize: '0.9rem',
-    flexShrink: 0,
-  },
+  disconnectedIcon: { fontSize: '0.9rem', flexShrink: 0 },
   disconnectedText: {
     fontSize: '0.75rem',
     color: '#718096',
     whiteSpace: 'nowrap',
   },
   connectButton: {
-    marginRight: '28px',
-    padding: '4px 12px',
+    marginRight: '34px',
+    height: '18px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '2px 12px',
     background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
     border: 'none',
     borderRadius: '6px',
@@ -306,11 +368,9 @@ const styles: { [key: string]: React.CSSProperties } = {
     fontWeight: '700',
     cursor: 'pointer',
     flexShrink: 0,
+    boxSizing: 'border-box',
   },
-  connectButtonDisabled: {
-    opacity: 0.6,
-    cursor: 'not-allowed',
-  },
+  connectButtonDisabled: { opacity: 0.6, cursor: 'not-allowed' },
   /* ─── Profile ─── */
   placeholderSection: {
     display: 'flex',
@@ -319,26 +379,26 @@ const styles: { [key: string]: React.CSSProperties } = {
     justifyContent: 'center',
     gap: '6px',
     minHeight: '56px',
+    position: 'relative',
+    zIndex: 1,
   },
-  placeholderIcon: {
-    fontSize: '1.5rem',
-  },
-  placeholderText: {
-    margin: 0,
-    fontSize: '0.75rem',
-    color: '#a0aec0',
-  },
+  placeholderIcon: { fontSize: '1.5rem' },
+  placeholderText: { margin: 0, fontSize: '0.75rem', color: '#a0aec0' },
   profileSection: {
     display: 'flex',
     alignItems: 'center',
     gap: '12px',
     minHeight: '56px',
+    position: 'relative',
+    zIndex: 1,
   },
   avatar: {
     width: '56px',
     height: '56px',
     borderRadius: '50%',
     objectFit: 'cover',
+    border: '3px solid rgba(255,255,255,0.8)',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.12)',
   },
   avatarPlaceholder: {
     width: '56px',
@@ -351,11 +411,13 @@ const styles: { [key: string]: React.CSSProperties } = {
     fontSize: '1.5rem',
     fontWeight: 'bold',
     color: '#ffffff',
+    border: '3px solid rgba(255,255,255,0.3)',
   },
-  info: {
-    flex: 1,
-    minWidth: 0,
+  loadingSpinner: {
+    fontSize: '1.2rem',
+    animation: 'pulse 1.5s ease-in-out infinite',
   },
+  info: { flex: 1, minWidth: 0 },
   name: {
     margin: '0 0 2px 0',
     fontSize: '0.85rem',
@@ -373,3 +435,11 @@ const styles: { [key: string]: React.CSSProperties } = {
     wordBreak: 'break-all',
   },
 };
+
+// Inject keyframes once
+if (typeof document !== 'undefined' && !document.getElementById('profilecard-keyframes')) {
+  const s = document.createElement('style');
+  s.id = 'profilecard-keyframes';
+  s.textContent = '@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}';
+  document.head.appendChild(s);
+}

@@ -4,7 +4,7 @@ import { useUpProvider } from '@/lib/up-provider';
 import { LUKSO_RPC_URL } from '@/lib/constants';
 import { useInfiniteOwnedAssets, useInfiniteOwnedTokens, useNft } from '@lsp-indexer/react';
 import { toGatewayUrl } from '@/lib/utils';
-import { useEffect, useState, useMemo, useCallback, useRef, memo } from 'react';
+import { useLayoutEffect, useEffect, useState, useMemo, useCallback, useRef, memo } from 'react';
 import { ethers } from 'ethers';
 import { Popup } from '@/components/Popup';
 import type { PopupLink } from '@/components/Popup';
@@ -594,8 +594,8 @@ function NftSectionHeaderRow({ label, protocol, count, sectionKey, isExpanded, o
   isExpanded: boolean; onToggle: (key: string) => void;
 }) {
   return (
-    <div style={{ background: '#f8fafc', marginBottom: '2px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0', cursor: 'pointer', userSelect: 'none' }}
+    <div style={{ background: '#f8fafc', marginBottom: '2px', height: '32px', display: 'flex', alignItems: 'center' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }}
         onClick={() => onToggle(sectionKey)}
         onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.opacity = '0.7'; }}
         onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.opacity = '1'; }}>
@@ -638,10 +638,12 @@ const NftVirtualList = memo(function NftVirtualList({
   rows,
   listRef,
   renderRow,
+  initialOffset,
 }: {
   rows: VirtualRow[];
   listRef: React.RefObject<HTMLDivElement | null>;
   renderRow: (row: VirtualRow) => React.ReactNode;
+  initialOffset?: number;
 }) {
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -974,20 +976,17 @@ export function AssetList({ address }: AssetListProps) {
   }, [nftFilter]);
 
   // 展開/折りたたみ時は現在フィルターのスクロール位置を維持
-  // rAF × 2 で virtualizer の DOM 測定完了を確実に待つ
+  // useLayoutEffect でブラウザの最初のペイント前に復元
   const prevVirtualRowsLength = useRef(virtualRows.length);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (nftFilterSwitching.current) return;
     const el = nftListRef.current;
     if (!el) return;
     if (prevVirtualRowsLength.current === virtualRows.length) return;
-    // 1. 行数が変わる前の現在のスクロール位置を保存
     const savedScroll = el.scrollTop;
     nftScrollByFilter.current[nftFilter] = savedScroll;
     prevVirtualRowsLength.current = virtualRows.length;
-    // 2. rAF: ブラウザがDOM更新を確定するのを待つ
     requestAnimationFrame(() => {
-      // 3. さらにrAF: virtualizerのmeasureElement完了後に復元
       requestAnimationFrame(() => {
         el.scrollTop = nftScrollByFilter.current[nftFilter] ?? savedScroll;
       });
@@ -1009,7 +1008,7 @@ export function AssetList({ address }: AssetListProps) {
           />
         );
       case 'divider':
-        return <div style={{ height: '1px', background: '#e2e8f0', margin: '8px 0' }} />;
+        return <div style={{ height: '17px', display: 'flex', alignItems: 'center' }}><div style={{ height: '1px', background: '#e2e8f0', width: '100%' }} /></div>;
       case 'collection-header':
         return (
           <NftCollectionHeaderRow
@@ -1021,13 +1020,11 @@ export function AssetList({ address }: AssetListProps) {
         );
       case 'nft-child':
         return (
-          <div style={{ paddingLeft: '12px' }}>
-            <NftChildItem
-              entry={row.child}
-              collectionFallbackIcon={row.child.collectionFallbackIcon}
-              handleSelectAsset={handleSelectAsset}
-            />
-          </div>
+          <NftChildItem
+            entry={row.child}
+            collectionFallbackIcon={row.child.collectionFallbackIcon}
+            handleSelectAsset={handleSelectAsset}
+          />
         );
       case 'lsp7-single':
         return <Lsp7SingleNftListItem item={row.item} />;
@@ -1229,10 +1226,16 @@ export function AssetList({ address }: AssetListProps) {
           </div>
           <div style={{ position: 'relative' }}>
             <div style={{ display: activeTab === 'tokens' ? 'block' : 'none' }}>{renderTokenList(tokenItems, tokenListRef)}</div>
-            <div style={{ display: activeTab === 'nfts' ? 'block' : 'none' }}>
-              {virtualRows.length === 0
-                ? <p style={styles.empty}>No NFTs found</p>
-                : <NftVirtualList rows={virtualRows} listRef={nftListRef} renderRow={renderVirtualRow} />}
+            <div style={{ display: activeTab === 'nfts' ? 'block' : 'none', minHeight: '60px' }}>
+              {!targetAddress ? (
+                <p style={styles.empty}>🔌</p>
+              ) : virtualRows.length === 0 && ownedTokens.length === 0 ? (
+                <div style={{ minHeight: '200px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#a0aec0', fontSize: '0.85rem' }}>Loading...</div>
+              ) : virtualRows.length === 0 ? (
+                <p style={styles.empty}>No NFTs found</p>
+              ) : (
+                <NftVirtualList rows={virtualRows} listRef={nftListRef} renderRow={renderVirtualRow} />
+              )}
             </div>
           </div>
         </div>
@@ -1274,7 +1277,8 @@ const formatTokenAmount = (amount: string) => {
 // ─── Styles ──────────────────────────────────────────────────
 
 const styles: Record<string, React.CSSProperties> = {
-  card: { padding: '8px', background: 'rgba(255,255,255,0.95)', borderRadius: '16px', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' },
+  card: { padding: '8px', background: 'rgba(255,255,255,0.95)', borderRadius: '16px', boxShadow: '0 4px 12px rgba(0,0,0,0.1)', minHeight: '600px' },
+  tabContent: { minHeight: '360px' },
   title: { margin: '0 0 8px 0', fontSize: '1rem', fontWeight: '700', color: '#1a202c' },
   tabs: { display: 'flex', gap: '8px', marginBottom: '8px' },
   tab: { flex: 1, padding: '10px 12px', border: 'none', borderRadius: '10px', background: '#f7fafc', color: '#718096', fontSize: '0.85rem', fontWeight: '600', cursor: 'pointer', transition: 'all 0.25s ease', minHeight: '42px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' },
@@ -1282,7 +1286,7 @@ const styles: Record<string, React.CSSProperties> = {
   tabCount: { fontWeight: '800' },
   searchInput: { width: '100%', padding: '8px 12px', marginBottom: '8px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '16px', outline: 'none', boxSizing: 'border-box' },
   list: { display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '450px', overflowY: 'auto', minHeight: '60px' },
-  item: { display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 8px', background: '#f7fafc', borderRadius: '8px', transition: 'background 0.15s ease', position: 'relative' },
+  item: { display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 8px', background: '#f7fafc', borderRadius: '8px', transition: 'background 0.15s ease', position: 'relative', height: '44px', overflow: 'hidden', boxSizing: 'border-box', flexShrink: 0 },
   itemIcon: { width: '28px', height: '28px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem', overflow: 'hidden', flexShrink: 0 },
   itemIconWithImg: { width: '28px', height: '28px', borderRadius: '50%', background: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem', overflow: 'hidden', flexShrink: 0 },
   itemIconImg: { width: '100%', height: '100%', objectFit: 'cover' },
