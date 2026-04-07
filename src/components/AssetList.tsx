@@ -755,8 +755,19 @@ export function AssetList({ address }: AssetListProps) {
     setSelectedAsset(null);
   }, []);
   const toggleCollection = useCallback((id: string) => {
+    // 1. re-render前にscroll位置を保存
+    const el = nftListRef.current;
+    const saved = el ? el.scrollTop : 0;
+    nftScrollByFilter.current[nftFilter] = saved;
+    // 2. state更新 → virtualRowsの再生成 → NftVirtualList re-render
     setExpandedCollections(prev => { const n = new Set(prev); const k = id.toLowerCase(); n.has(k) ? n.delete(k) : n.add(k); return n; });
-  }, []);
+    // 3. DOM更新完了後にscroll復元（rAF 2段）
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (el) el.scrollTop = nftScrollByFilter.current[nftFilter] ?? saved;
+      });
+    });
+  }, [nftFilter]);
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') handleClosePopup(); };
@@ -963,20 +974,24 @@ export function AssetList({ address }: AssetListProps) {
   }, [nftFilter]);
 
   // 展開/折りたたみ時は現在フィルターのスクロール位置を維持
-  // requestAnimationFrame を挟んで virtualizer の DOM 測定完了後に復元する
+  // rAF × 2 で virtualizer の DOM 測定完了を確実に待つ
   const prevVirtualRowsLength = useRef(virtualRows.length);
   useEffect(() => {
     if (nftFilterSwitching.current) return;
     const el = nftListRef.current;
     if (!el) return;
-    const savedScroll = nftScrollByFilter.current[nftFilter] ?? 0;
-    if (prevVirtualRowsLength.current !== virtualRows.length) {
-      nftScrollByFilter.current[nftFilter] = savedScroll;
+    if (prevVirtualRowsLength.current === virtualRows.length) return;
+    // 1. 行数が変わる前の現在のスクロール位置を保存
+    const savedScroll = el.scrollTop;
+    nftScrollByFilter.current[nftFilter] = savedScroll;
+    prevVirtualRowsLength.current = virtualRows.length;
+    // 2. rAF: ブラウザがDOM更新を確定するのを待つ
+    requestAnimationFrame(() => {
+      // 3. さらにrAF: virtualizerのmeasureElement完了後に復元
       requestAnimationFrame(() => {
-        el.scrollTop = savedScroll;
+        el.scrollTop = nftScrollByFilter.current[nftFilter] ?? savedScroll;
       });
-      prevVirtualRowsLength.current = virtualRows.length;
-    }
+    });
   }, [virtualRows.length, nftFilter]);
 
   // ─── renderVirtualRow callback ───────────────────────────
@@ -1017,7 +1032,7 @@ export function AssetList({ address }: AssetListProps) {
       case 'lsp7-single':
         return <Lsp7SingleNftListItem item={row.item} />;
     }
-  }, [expandedSections, expandedCollections, toggleSection, toggleCollection, handleSelectAsset]);
+  }, [expandedSections, toggleSection, toggleCollection, handleSelectAsset]);
 
   // NftVirtualList is defined at module level (below) to prevent
   // useVirtualizer from resetting on every AssetList re-render.
