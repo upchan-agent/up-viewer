@@ -4,13 +4,22 @@ import { useUpProvider } from '@/lib/up-provider';
 import { useProfile } from '@lsp-indexer/react';
 import { toGatewayUrl } from '@/lib/utils';
 
-// Helper to get first image URL from profileImage array
 const getProfileImageUrl = (profile: { profileImage?: { url: string }[] | null } | null): string | undefined => {
   if (!profile?.profileImage?.[0]?.url) return undefined;
   return toGatewayUrl(profile.profileImage[0].url);
 };
 
-export function ProfileCard({ address: propAddress }: { address?: string }) {
+export function ProfileCard({
+  address: propAddress,
+  isViewMode,
+  onExitViewMode,
+  onToggleSearch,
+}: {
+  address?: string;
+  isViewMode?: boolean;
+  onExitViewMode?: () => void;
+  onToggleSearch?: () => void;
+}) {
   const {
     displayAddress,
     isMiniApp,
@@ -22,14 +31,12 @@ export function ProfileCard({ address: propAddress }: { address?: string }) {
     isDetecting,
   } = useUpProvider();
 
-  // URL parameter takes priority over wallet connection
   const activeAddress = propAddress || displayAddress;
 
   const { profile, isLoading: isProfileLoading } = useProfile({
     address: activeAddress || '',
   });
 
-  // Switch account handler (standalone mode only)
   const handleSwitch = async () => {
     if (!provider) return;
     try {
@@ -39,84 +46,97 @@ export function ProfileCard({ address: propAddress }: { address?: string }) {
     }
   };
 
-  // Profile state
   const hasProfile = activeAddress && !isProfileLoading && profile;
-
-  // Get profile info
   const name = profile?.name || 'Unknown';
   const initials = name.charAt(0).toUpperCase();
   const profileImageUrl = getProfileImageUrl(profile);
 
   return (
     <div style={styles.card}>
-      {/* Connection Status Section */}
+      {/* Connection Status Section — always renders */}
       <div style={styles.connectionSection}>
-        {/* Initial detection skeleton */}
-        {isDetecting && (
-          <div style={styles.skeletonRow}>
-            <div style={styles.skeletonIcon} />
-            <div style={styles.skeletonText} />
-          </div>
-        )}
 
-        {/* Wallet Connected State */}
-        {viewMode === 'wallet' && (
-          <div style={styles.connectedRow}>
-            <span style={styles.connectedIcon}>🟢</span>
-            <span style={styles.connectedText}>
-              {isMiniApp ? 'Connected via Grid' : 'Connected'}
-            </span>
-            {/* Switch button only for standalone mode */}
-            {!isMiniApp && (
-              <button onClick={handleSwitch} style={styles.switchButton}>
-                Switch
-              </button>
-            )}
-          </div>
-        )}
-
-        {/* Grid Context State (viewing embedded profile, not yet connected) */}
-        {viewMode === 'grid' && (
-          <div style={styles.viewingRow}>
-            <span style={styles.viewingIcon}>👀</span>
-            <span style={styles.viewingText}>Viewing via Grid</span>
-          </div>
-        )}
-
-        {/* Standalone Disconnected */}
-        {!isDetecting && viewMode === 'none' && isMiniApp === false && (
-          <div style={styles.disconnectedRow}>
-            <span style={styles.disconnectedIcon}>🔌</span>
-            <span style={styles.disconnectedText}>Not connected</span>
-            <button
-              onClick={connect}
-              disabled={isConnecting}
-              style={{
-                ...styles.connectButton,
-                ...(isConnecting ? styles.connectButtonDisabled : {}),
-              }}
-            >
-              {isConnecting ? 'Connecting...' : 'Connect'}
+        {/* ── View Mode: override all normal states ── */}
+        {isViewMode && onExitViewMode && (
+          <div style={styles.viewModeRow}>
+            <span style={styles.viewModeIcon}>👀</span>
+            <span style={styles.viewModeText}>View mode</span>
+            <button onClick={onExitViewMode} style={styles.exitButton}>
+              Exit
             </button>
           </div>
+        )}
+
+        {/* ── Normal states (hidden in view mode) ── */}
+        {!isViewMode && (
+          <>
+            {isDetecting && (
+              <div style={styles.skeletonRow}>
+                <div style={styles.skeletonIcon} />
+                <div style={styles.skeletonText} />
+              </div>
+            )}
+
+            {viewMode === 'wallet' && (
+              <div style={styles.connectedRow}>
+                <span style={styles.connectedIcon}>🟢</span>
+                <span style={styles.connectedText}>
+                  {isMiniApp ? 'Connected via Grid' : 'Connected'}
+                </span>
+                {!isMiniApp && (
+                  <button onClick={handleSwitch} style={styles.switchButton}>
+                    Switch
+                  </button>
+                )}
+              </div>
+            )}
+
+            {viewMode === 'grid' && (
+              <div style={styles.viewingRow}>
+                <span style={styles.viewingIcon}>👀</span>
+                <span style={styles.viewingText}>Viewing via Grid</span>
+              </div>
+            )}
+
+            {!isDetecting && viewMode === 'none' && isMiniApp === false && (
+              <div style={styles.disconnectedRow}>
+                <span style={styles.disconnectedIcon}>🔌</span>
+                <span style={styles.disconnectedText}>Not connected</span>
+                <button
+                  onClick={connect}
+                  disabled={isConnecting}
+                  style={{
+                    ...styles.connectButton,
+                    ...(isConnecting ? styles.connectButtonDisabled : {}),
+                  }}
+                >
+                  {isConnecting ? 'Connecting...' : 'Connect'}
+                </button>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* ── 🔍 Search button — always visible ── */}
+        {onToggleSearch && (
+          <button onClick={onToggleSearch} style={styles.searchButtonFixed} aria-label="Search UP">
+            🔍
+          </button>
         )}
       </div>
 
       {/* Profile Section */}
       {!activeAddress ? (
-        // No address at all: show placeholder
         <div style={styles.placeholderSection}>
           <span style={styles.placeholderIcon}>👤</span>
           <p style={styles.placeholderText}>No profile connected</p>
         </div>
       ) : !hasProfile ? (
-        // Connected but loading profile: show placeholder
         <div style={styles.placeholderSection}>
           <span style={styles.placeholderIcon}>👤</span>
           <p style={styles.placeholderText}>Loading profile...</p>
         </div>
       ) : (
-        // Profile loaded: show content
         <div style={styles.profileSection}>
           {profileImageUrl ? (
             <img src={profileImageUrl} alt={name} style={styles.avatar} />
@@ -142,9 +162,53 @@ const styles: { [key: string]: React.CSSProperties } = {
   },
   connectionSection: {
     marginBottom: '8px',
-    height: '20px',
+    minHeight: '20px',
     position: 'relative',
   },
+  /* ─── View Mode ─── */
+  viewModeRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    minHeight: '20px',
+  },
+  viewModeIcon: {
+    fontSize: '0.9rem',
+    flexShrink: 0,
+  },
+  viewModeText: {
+    fontSize: '0.75rem',
+    color: '#3182ce',
+    fontWeight: '600',
+    whiteSpace: 'nowrap',
+  },
+  exitButton: {
+    marginLeft: 'auto',
+    padding: '2px 8px',
+    background: '#fed7d7',
+    border: 'none',
+    borderRadius: '6px',
+    color: '#e53e3e',
+    fontSize: '0.7rem',
+    fontWeight: '600',
+    cursor: 'pointer',
+    flexShrink: 0,
+  },
+  /* ─── Search Button (always visible, fixed right) ─── */
+  searchButtonFixed: {
+    position: 'absolute',
+    right: '0',
+    top: '0',
+    padding: '2px 6px',
+    background: 'rgba(255,255,255,0.8)',
+    border: '1px solid #e2e8f0',
+    borderRadius: '6px',
+    fontSize: '0.85rem',
+    cursor: 'pointer',
+    flexShrink: 0,
+    lineHeight: 1,
+  },
+  /* ─── Skeleton ─── */
   skeletonRow: {
     display: 'flex',
     alignItems: 'center',
@@ -168,6 +232,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     backgroundSize: '200% 100%',
     animation: 'shimmer 1.5s infinite',
   },
+  /* ─── Connected ─── */
   connectedRow: {
     display: 'flex',
     alignItems: 'center',
@@ -186,6 +251,7 @@ const styles: { [key: string]: React.CSSProperties } = {
   },
   switchButton: {
     marginLeft: 'auto',
+    marginRight: '28px',
     padding: '4px 10px',
     background: '#e2e8f0',
     border: 'none',
@@ -196,6 +262,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     cursor: 'pointer',
     flexShrink: 0,
   },
+  /* ─── Grid ─── */
   viewingRow: {
     display: 'flex',
     alignItems: 'center',
@@ -212,6 +279,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     fontWeight: '600',
     whiteSpace: 'nowrap',
   },
+  /* ─── Disconnected ─── */
   disconnectedRow: {
     display: 'flex',
     alignItems: 'center',
@@ -228,7 +296,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     whiteSpace: 'nowrap',
   },
   connectButton: {
-    marginLeft: 'auto',
+    marginRight: '28px',
     padding: '4px 12px',
     background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
     border: 'none',
@@ -243,6 +311,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     opacity: 0.6,
     cursor: 'not-allowed',
   },
+  /* ─── Profile ─── */
   placeholderSection: {
     display: 'flex',
     flexDirection: 'column',

@@ -5,15 +5,52 @@ import { ProfileCard } from '@/components/ProfileCard';
 import { SocialGraph } from '@/components/SocialGraph';
 import { AssetList } from '@/components/AssetList';
 import { ActivityList } from '@/components/ActivityList';
-import { useState, Suspense } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useState, Suspense, useCallback, useEffect, useRef } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
 
 type TabType = 'assets' | 'social' | 'activity';
 
 function ViewerInner() {
   const searchParams = useSearchParams();
+  const router = useRouter();
+
+  // URL param address
   const urlAddress = searchParams.get('address') as `0x${string}` | null;
+
+  // View mode address (from UI search)
+  const viewAddressParam = searchParams.get('view') as `0x${string}` | null;
+  const [viewAddress, setViewAddress] = useState<`0x${string}` | null>(viewAddressParam);
+
+  // Active address: view mode > URL param > wallet
+  const activeAddress = viewAddress || urlAddress || undefined;
+  const isViewMode = !!viewAddress || !!urlAddress;
+
+  // Keep URL synced when view address changes
+  useEffect(() => {
+    if (viewAddress) {
+      router.replace(`?view=${viewAddress}`, { scroll: false });
+    }
+  }, [viewAddress, router]);
+
+  // Sync viewAddress from URL (e.g. shared link)
+  useEffect(() => {
+    if (viewAddressParam && viewAddressParam !== viewAddress) {
+      setViewAddress(viewAddressParam);
+    }
+  }, [viewAddressParam]);
+
   const [activeTab, setActiveTab] = useState<TabType>('assets');
+  const [showSearch, setShowSearch] = useState(false);
+
+  const handleSelectAddress = useCallback((addr: `0x${string}`) => {
+    setViewAddress(addr);
+    setShowSearch(false);
+  }, []);
+
+  const handleExitViewMode = useCallback(() => {
+    setViewAddress(null);
+    router.replace('/', { scroll: false });
+  }, [router]);
 
   return (
     <div style={styles.container}>
@@ -25,7 +62,19 @@ function ViewerInner() {
       </header>
 
       <div style={styles.content}>
-        <ProfileCard address={urlAddress || undefined} />
+        <ProfileCard
+          address={activeAddress}
+          isViewMode={isViewMode}
+          onExitViewMode={handleExitViewMode}
+          onToggleSearch={isViewMode ? undefined : () => setShowSearch(prev => !prev)}
+        />
+
+        {showSearch && (
+          <DynamicProfileSearch
+            onSelect={handleSelectAddress}
+            onCancel={() => setShowSearch(false)}
+          />
+        )}
 
         <div style={styles.tabs}>
           <button
@@ -48,9 +97,17 @@ function ViewerInner() {
           </button>
         </div>
 
-        {activeTab === 'assets' && <AssetList address={urlAddress || undefined} />}
-        {activeTab === 'social' && <SocialGraph />}
-        {activeTab === 'activity' && <ActivityList />}
+        {/* Keep all tabs mounted to preserve state and scroll position.
+            display:none hides inactive tabs without unmounting them. */}
+        <div style={{ display: activeTab === 'assets' ? 'block' : 'none' }}>
+          <AssetList address={activeAddress} />
+        </div>
+        <div style={{ display: activeTab === 'social' ? 'block' : 'none' }}>
+          <SocialGraph address={activeAddress} />
+        </div>
+        <div style={{ display: activeTab === 'activity' ? 'block' : 'none' }}>
+          <ActivityList address={activeAddress} />
+        </div>
       </div>
 
       <footer style={styles.footer}>
@@ -67,6 +124,25 @@ function ViewerInner() {
       </footer>
     </div>
   );
+}
+
+// Lazy-loaded ProfileSearch to avoid SSR issues
+// Uses useRef to prevent re-mount on every render (keeps input focus)
+function DynamicProfileSearch(props: { onSelect: (addr: `0x${string}`) => void; onCancel: () => void }) {
+  const ref = useRef<{ default?: any; ProfileSearch?: any } | null>(null);
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    if (ref.current) return;
+    import('@/components/ProfileSearch').then(m => {
+      ref.current = m;
+      setTick(t => t + 1);
+    });
+  }, []);
+
+  const ProfileSearch = ref.current?.ProfileSearch;
+  if (!ProfileSearch) return null;
+  return <ProfileSearch {...props} />;
 }
 
 function ViewerContent() {

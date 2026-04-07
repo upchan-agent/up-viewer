@@ -6,10 +6,11 @@ interface ActivityListProps {
   address?: `0x${string}`;
 }
 
-export function ActivityList({ address: _address }: ActivityListProps) {
+export function ActivityList({ address }: ActivityListProps) {
   const { displayAddress } = useUpProvider();
 
-  const showPlaceholder = !displayAddress;
+  const targetAddress = address || displayAddress;
+  const showPlaceholder = !targetAddress;
 
   return (
     <div style={styles.card}>
