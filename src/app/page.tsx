@@ -97,9 +97,17 @@ function ViewerInner() {
           </button>
         </div>
 
-        {activeTab === 'assets' && <AssetList address={activeAddress} />}
-        {activeTab === 'social' && <SocialGraph address={activeAddress} />}
-        {activeTab === 'activity' && <ActivityList address={activeAddress} />}
+        {/* Keep all tabs mounted to preserve state and scroll position.
+            display:none hides inactive tabs without unmounting them. */}
+        <div style={{ display: activeTab === 'assets' ? 'block' : 'none' }}>
+          <AssetList address={activeAddress} />
+        </div>
+        <div style={{ display: activeTab === 'social' ? 'block' : 'none' }}>
+          <SocialGraph address={activeAddress} />
+        </div>
+        <div style={{ display: activeTab === 'activity' ? 'block' : 'none' }}>
+          <ActivityList address={activeAddress} />
+        </div>
       </div>
 
       <footer style={styles.footer}>

@@ -115,7 +115,8 @@ export function UpProvider({ children }: UpProviderProps) {
           });
 
           // Polling fallback: Grid OFF→ON may not fire events,
-          // so actively re-request accounts via RPC every 2 seconds
+          // so actively re-request accounts via RPC every 10 seconds.
+          // 10s is sufficient for account detection; 2s caused unnecessary CPU load on mobile.
           pollInterval = setInterval(async () => {
             try {
               const rpcAccounts = await gridProvider.request({ method: 'eth_accounts' }) as string[];
@@ -138,7 +139,7 @@ export function UpProvider({ children }: UpProviderProps) {
             } catch {
               // Ignore polling errors
             }
-          }, 2000);
+          }, 10000);
         } else if (luksoProvider) {
           // Standalone mode: use window.lukso (browser extension)
           setProvider(luksoProvider);
