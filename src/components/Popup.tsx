@@ -128,12 +128,12 @@ export const Popup = memo(function Popup({
 
   // Banner avatar content — what to show inside the circular avatar
   const avatarContent = isLoading
-    ? <span style={{ fontSize: '1rem', color: '#a0aec0' }}>⏳</span>
+    ? <span style={{ fontSize: '1rem', color: 'var(--color-text-faint)' }}>⏳</span>
     : image?.url
       ? <img src={image.url} alt="" style={styles.bannerAvatar}
           onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
       : placeholderInitial
-        ? <span style={{ fontSize: '1.4rem', fontWeight: 700, color: '#fff' }}>{placeholderInitial}</span>
+        ? <span style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--color-text-white)' }}>{placeholderInitial}</span>
         : <span style={{ fontSize: '1.4rem' }}>{placeholderEmoji}</span>;
 
   return (
@@ -157,7 +157,7 @@ export const Popup = memo(function Popup({
                 the image bytes arrive. No image → grey placeholder. */}
             <div style={{
               ...styles.bannerBackground,
-              background: backgroundImage ? 'transparent' : '#e2e8f0',
+              background: backgroundImage ? 'transparent' : 'var(--color-border-default)',
             }}>
               {backgroundImage && (
                 <img
@@ -171,7 +171,9 @@ export const Popup = memo(function Popup({
             </div>
             <div style={{
               ...styles.bannerAvatarWrapper,
-              background: (!image?.url && !placeholderInitial) ? '#e2e8f0' : '#f7fafc',
+              background: (!image?.url && !placeholderInitial)
+                ? 'var(--color-border-default)'
+                : 'var(--color-surface-muted)',
             }}>
               {avatarContent}
             </div>
@@ -291,6 +293,10 @@ export const Popup = memo(function Popup({
 
 // ─── Styles ──────────────────────────────────────────────────
 
+// ─── Styles ──────────────────────────────────────────────────
+// popupIn keyframes は globals.css で定義済み。
+// document.createElement('style') による注入は不要。
+
 const styles: Record<string, React.CSSProperties> = {
   overlay: {
     position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
@@ -299,129 +305,148 @@ const styles: Record<string, React.CSSProperties> = {
     backdropFilter: 'blur(2px)',
   },
   popup: {
-    background: '#fff', borderRadius: '16px',
-    boxShadow: '0 20px 60px rgba(0,0,0,0.15)',
+    background: 'var(--color-surface-input)',
+    borderRadius: 'var(--radius-2xl)',
+    boxShadow: 'var(--shadow-popup)',
     maxWidth: '420px', width: '90%',
-    height: '70vh',           // always full height — prevents size shift on content load
+    height: '70vh',     // 固定高さでコンテンツロード時のサイズシフトを防ぐ
     overflowY: 'auto', overflowX: 'hidden',
-    position: 'relative', padding: '16px',
+    position: 'relative', padding: 'var(--space-4)',
     animation: 'popupIn 0.2s ease', transformOrigin: 'center',
     boxSizing: 'border-box',
   },
   closeButton: {
-    position: 'absolute', top: '8px', right: '12px',
+    position: 'absolute', top: 'var(--space-2)', right: 'var(--space-3)',
     background: 'none', border: 'none', fontSize: '1.5rem',
-    cursor: 'pointer', color: '#718096', lineHeight: 1, zIndex: 2,
+    cursor: 'pointer', color: 'var(--color-text-muted)', lineHeight: 1, zIndex: 2,
   },
 
-  // Standard image (Asset) — always reserves height to prevent layout shift
+  // 標準画像エリア（Asset）— 固定高さでレイアウトシフトを防ぐ
   imageWrapper: {
-    width: '100%', height: '160px', borderRadius: '12px',
-    overflow: 'hidden', marginBottom: '12px',
+    width: '100%', height: '160px',
+    borderRadius: 'var(--radius-xl)',
+    overflow: 'hidden', marginBottom: 'var(--space-3)',
     display: 'flex', justifyContent: 'center', alignItems: 'center',
-    background: '#f7fafc', flexShrink: 0,
+    background: 'var(--color-surface-muted)', flexShrink: 0,
   },
   image: { maxWidth: '100%', maxHeight: '160px', objectFit: 'contain' },
-  loadingText: { color: '#a0aec0', fontSize: '0.85rem' },
-  placeholderEmoji: { color: '#a0aec0', fontSize: '2rem' },
+  loadingText: { color: 'var(--color-text-faint)', fontSize: 'var(--text-md)' },
+  placeholderEmoji: { color: 'var(--color-text-faint)', fontSize: '2rem' },
 
-  // Background + avatar layout (Social)
+  // バナー＋アバターレイアウト（Social）
   bannerWrapper: {
-    width: '100%', marginBottom: '12px', position: 'relative',
-    borderRadius: '12px', overflow: 'visible',
+    width: '100%', marginBottom: 'var(--space-3)', position: 'relative',
+    borderRadius: 'var(--radius-xl)', overflow: 'visible',
   },
   bannerBackground: {
-    width: '100%', height: '100px', borderRadius: '12px',
+    width: '100%', height: '100px',
+    borderRadius: 'var(--radius-xl)',
     overflow: 'hidden', position: 'relative',
   },
   bannerBgImg: {
     width: '100%', height: '100%',
     objectFit: 'cover', objectPosition: 'center',
-    opacity: 0, transition: 'opacity 0.2s ease',
+    opacity: 0, transition: `opacity var(--transition-normal)`,
     display: 'block',
   },
   bannerAvatarWrapper: {
-    position: 'absolute', bottom: '-28px', left: '16px',
-    width: '64px', height: '64px', borderRadius: '50%',
-    border: '3px solid #fff', overflow: 'hidden',
-    background: '#f7fafc',
+    position: 'absolute', bottom: '-28px', left: 'var(--space-4)',
+    width: '64px', height: '64px',
+    borderRadius: 'var(--radius-full)',
+    border: '3px solid var(--color-surface-input)',
+    overflow: 'hidden',
+    background: 'var(--color-surface-muted)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    boxShadow: '0 2px 8px rgba(0,0,0,0.12)',
+    boxShadow: 'var(--shadow-avatar)',
   },
   bannerAvatar: { width: '100%', height: '100%', objectFit: 'cover' },
 
-  // Header
-  header: { marginBottom: '8px', marginTop: '0' },
-  name: { fontSize: '1.1rem', fontWeight: '700', color: '#1a202c', margin: 0, lineHeight: 1.3 },
-  subLabel: { fontSize: '0.8rem', color: '#718096', fontWeight: '500' },
+  // ヘッダー
+  header: { marginBottom: 'var(--space-2)', marginTop: '0' },
+  name: {
+    fontSize: 'var(--text-xl)', fontWeight: '700',
+    color: 'var(--color-text-primary)', margin: 0, lineHeight: 1.3,
+  },
+  subLabel: {
+    fontSize: '0.8rem', color: 'var(--color-text-muted)', fontWeight: '500',
+  },
 
-  // Tags
-  tagsRow: { display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '8px' },
+  // タグ
+  tagsRow: { display: 'flex', flexWrap: 'wrap', gap: 'var(--space-1)', marginBottom: 'var(--space-2)' },
   tag: {
-    fontSize: '0.7rem', padding: '2px 8px',
-    background: '#edf2f7', borderRadius: '999px',
-    color: '#4a5568', fontWeight: '500',
+    fontSize: 'var(--text-sm)', padding: '2px 8px',
+    background: 'var(--color-surface-tag)',
+    borderRadius: 'var(--radius-full)',
+    color: 'var(--color-text-tag)', fontWeight: '500',
   },
 
-  // Description
+  // 説明文
   description: {
-    fontSize: '0.85rem', color: '#4a5568', lineHeight: 1.5,
-    margin: '0 0 8px 0', wordBreak: 'break-word', whiteSpace: 'pre-wrap',
+    fontSize: 'var(--text-md)', color: 'var(--color-text-secondary)', lineHeight: 1.5,
+    margin: '0 0 var(--space-2) 0', wordBreak: 'break-word', whiteSpace: 'pre-wrap',
   },
 
-  // Stats grid
+  // Stats グリッド
   statsGrid: {
     display: 'grid', gridTemplateColumns: '1fr 1fr',
-    gap: '8px', marginBottom: '8px',
+    gap: 'var(--space-2)', marginBottom: 'var(--space-2)',
   },
   statLabel: {
-    display: 'block', fontSize: '0.7rem', color: '#a0aec0',
+    display: 'block', fontSize: 'var(--text-sm)', color: 'var(--color-text-faint)',
     fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.025em',
   },
-  statValue: { fontSize: '0.85rem', fontWeight: '600', color: '#2d3748', wordBreak: 'break-all' },
+  statValue: {
+    fontSize: 'var(--text-md)', fontWeight: '600',
+    color: 'var(--color-text-secondary)', wordBreak: 'break-all',
+  },
 
-  // Links
-  link: { color: '#667eea', textDecoration: 'none', wordBreak: 'break-all' },
-  linksRow: { display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '4px' },
+  // リンク
+  link: { color: 'var(--color-text-link)', textDecoration: 'none', wordBreak: 'break-all' },
+  linksRow: { display: 'flex', flexWrap: 'wrap', gap: 'var(--space-1)', marginTop: 'var(--space-1)' },
   outboundLink: {
     fontSize: '0.8rem', padding: '4px 8px',
-    background: '#edf2f7', borderRadius: '6px',
-    color: '#4a5568', textDecoration: 'none',
-    transition: 'background 0.15s', wordBreak: 'break-all',
+    background: 'var(--color-surface-tag)',
+    borderRadius: 'var(--radius-sm)',
+    color: 'var(--color-text-secondary)', textDecoration: 'none',
+    transition: `background var(--transition-fast)`, wordBreak: 'break-all',
   },
 
   // Attributes
-  attributesGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginTop: '4px' },
+  attributesGrid: {
+    display: 'grid', gridTemplateColumns: '1fr 1fr',
+    gap: 'var(--space-1)', marginTop: 'var(--space-1)',
+  },
   attributeItem: {
-    padding: '6px 8px', background: '#f7fafc', borderRadius: '8px',
+    padding: '6px 8px',
+    background: 'var(--color-surface-attr)',
+    borderRadius: 'var(--radius-md)',
     display: 'flex', flexDirection: 'column', gap: '2px', overflow: 'hidden',
   },
-  attrKey: { fontSize: '0.7rem', color: '#a0aec0', fontWeight: '500' },
-  attrValue: { fontSize: '0.85rem', fontWeight: '600', color: '#2d3748', wordBreak: 'break-word' },
+  attrKey: { fontSize: 'var(--text-sm)', color: 'var(--color-text-faint)', fontWeight: '500' },
+  attrValue: {
+    fontSize: 'var(--text-md)', fontWeight: '600',
+    color: 'var(--color-text-secondary)', wordBreak: 'break-word',
+  },
 };
 
 const debugStyles: Record<string, React.CSSProperties> = {
   container: {
-    marginTop: '8px', fontSize: '0.58rem', color: '#6b7280',
-    borderRadius: '6px', border: '1px solid #e5e7eb', overflow: 'hidden',
+    marginTop: 'var(--space-2)', fontSize: '0.58rem', color: 'var(--color-text-muted)',
+    borderRadius: 'var(--radius-sm)',
+    border: `1px solid var(--color-border-debug)`, overflow: 'hidden',
   },
   toggle: {
     width: '100%', textAlign: 'left', border: 'none', cursor: 'pointer',
-    padding: '4px 8px', background: '#f9fafb',
-    fontWeight: 600, fontSize: '0.65rem', color: '#374151', userSelect: 'none',
+    padding: '4px var(--space-2)',
+    background: 'var(--color-surface-debug)',
+    fontWeight: 600, fontSize: 'var(--text-xs)',
+    color: 'var(--color-text-debug)', userSelect: 'none',
   },
   content: {
-    padding: '6px 8px', background: '#fef2f2',
+    padding: '6px var(--space-2)',
+    background: 'var(--color-surface-debug-body)',
     whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-    lineHeight: '1.4', color: '#e74c3c',
+    lineHeight: '1.4', color: 'var(--color-text-debug-val)',
     fontFamily: 'monospace', fontSize: '0.58rem',
   },
 };
-
-// Inject keyframes once
-if (typeof document !== 'undefined' && !document.getElementById('popup-keyframes')) {
-  const s = document.createElement('style');
-  s.id = 'popup-keyframes';
-  s.textContent = '@keyframes popupIn{from{opacity:0}to{opacity:1}}';
-  document.head.appendChild(s);
-}

@@ -4,18 +4,17 @@ import { useUpProvider } from '@/lib/up-provider';
 
 interface ActivityListProps {
   address?: `0x${string}`;
+  active?: boolean;  // 将来のフェッチ制御用（現在は未使用）
 }
 
-export function ActivityList({ address }: ActivityListProps) {
+export function ActivityList({ address, active: _active = true }: ActivityListProps) {
   const { displayAddress } = useUpProvider();
-
-  const targetAddress = address || displayAddress;
+  const targetAddress  = address || displayAddress;
   const showPlaceholder = !targetAddress;
 
   return (
     <div style={styles.card}>
       <h3 style={styles.title}>⚡ Activity</h3>
-
       {showPlaceholder ? (
         <p style={styles.empty}>🔌</p>
       ) : (
@@ -29,30 +28,35 @@ export function ActivityList({ address }: ActivityListProps) {
 
 const styles: { [key: string]: React.CSSProperties } = {
   card: {
-    padding: '8px',
-    background: 'rgba(255, 255, 255, 0.95)',
-    borderRadius: '16px',
-    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
-    minHeight: '600px',
-  },
-  title: {
-    margin: '0 0 8px 0',
-    fontSize: '1rem',
-    fontWeight: '700',
-    color: '#1a202c',
-  },
-  list: {
+    padding: 'var(--card-padding)',
+    background: 'var(--color-surface-card)',
+    borderRadius: 'var(--radius-2xl)',
+    boxShadow: 'var(--shadow-card)',
+    flex: 1,
     display: 'flex',
     flexDirection: 'column',
-    gap: '4px',
-    maxHeight: '450px',
+    minHeight: 0,
+  },
+  title: {
+    margin: '0 0 var(--space-2) 0',
+    fontSize: 'var(--text-lg)',
+    fontWeight: '700',
+    color: 'var(--color-text-primary)',
+    flexShrink: 0,
+  },
+  list: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 'var(--space-1)',
     overflowY: 'auto',
+    minHeight: 0,
   },
   empty: {
     margin: 0,
-    padding: '16px',
+    padding: 'var(--space-4)',
     textAlign: 'center',
-    color: '#a0aec0',
-    fontSize: '0.85rem',
+    color: 'var(--color-text-faint)',
+    fontSize: 'var(--text-md)',
   },
 };

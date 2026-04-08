@@ -1,9 +1,113 @@
+/* ─── Design Tokens ──────────────────────────────────────────
+   全コンポーネントはここで定義した変数を参照する。
+   ハードコードされた色・角丸・余白はこの変数に置き換える。
+   ──────────────────────────────────────────────────────────── */
+
+:root {
+  /* --- Brand gradient --- */
+  --gradient-brand: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+
+  /* --- Surface colors --- */
+  --color-surface-card:        rgba(255, 255, 255, 0.95);
+  --color-surface-muted:       #f7fafc;
+  --color-surface-hover:       #edf2f7;
+  --color-surface-input:       #ffffff;
+  --color-surface-tag:         #edf2f7;
+  --color-surface-danger-light:#fed7d7;
+  --color-surface-skeleton:    #e0e0e0;
+  --color-surface-skeleton-mid:#d0d0d0;
+  --color-surface-attr:        #f7fafc;
+  --color-surface-debug:       #f9fafb;
+  --color-surface-debug-body:  #fef2f2;
+  --color-surface-tab-inactive:#f7fafc;
+  --color-surface-nft-header:  #f8fafc;
+
+  /* --- Text colors --- */
+  --color-text-primary:   #1a202c;
+  --color-text-secondary: #4a5568;
+  --color-text-muted:     #718096;
+  --color-text-faint:     #a0aec0;
+  --color-text-white:     #ffffff;
+
+  /* --- Semantic text --- */
+  --color-text-connected: #48bb78;
+  --color-text-viewing:   #805ad5;
+  --color-text-viewmode:  #3182ce;
+  --color-text-link:      #667eea;
+  --color-text-danger:    #e53e3e;
+  --color-text-tag:       #4a5568;
+  --color-text-debug:     #374151;
+  --color-text-debug-val: #e74c3c;
+  --color-text-section:   #4a5568;
+
+  /* --- Border colors --- */
+  --color-border-default: #e2e8f0;
+  --color-border-muted:   #cbd5e0;
+  --color-border-debug:   #e5e7eb;
+
+  /* --- Border radius --- */
+  --radius-xs:   4px;
+  --radius-sm:   6px;
+  --radius-md:   8px;
+  --radius-lg:   10px;
+  --radius-xl:   12px;
+  --radius-2xl:  16px;
+  --radius-full: 9999px;
+
+  /* --- Shadows --- */
+  --shadow-card:   0 4px 12px rgba(0, 0, 0, 0.10);
+  --shadow-popup:  0 20px 60px rgba(0, 0, 0, 0.15);
+  --shadow-avatar: 0 2px 8px rgba(0, 0, 0, 0.12);
+
+  /* --- Spacing scale --- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+
+  /* --- Font sizes --- */
+  --text-xs:   0.65rem;
+  --text-sm:   0.7rem;
+  --text-base: 0.75rem;
+  --text-md:   0.85rem;
+  --text-lg:   1rem;
+  --text-xl:   1.1rem;
+
+  /* --- Layout --- */
+  --content-max-width: 480px;
+  --min-width-app:     320px;
+
+  /* --- Transitions --- */
+  --transition-fast:   0.15s ease;
+  --transition-normal: 0.2s ease;
+  --transition-slow:   0.25s ease;
+
+  /* --- Component sizes --- */
+  --card-padding:     8px;
+  --tab-height:       42px;
+  --conn-bar-height:  24px;
+  --profile-section-height: 64px;
+  --item-height:      40px;
+  --list-item-gap:    3px;   /* リストアイテム間の隙間。変更時は virtualizer の estimateSize も合わせること */
+  --list-min-height:  160px; /* リスト最低表示高さ（アイテム約4件分）。縦が狭い環境でも最低限操作可能に */
+  --list-max-height:  450px; /* デスクトップ等でリストが広がりすぎる場合の上限（将来の動的計算の床として保持）*/
+  --list-max-height:  450px;
+  --avatar-size-sm:   28px;
+  --avatar-size-lg:   56px;
+}
+
+/* ─── Reset ──────────────────────────────────────────────── */
+
 * {
   box-sizing: border-box;
 }
 
-html {
-  overflow-y: scroll;
+html,
+body {
+  height: 100%;
+  overflow: hidden;  /* ページ全体のスクロールを禁止。リストは overflowY:auto で内部スクロール */
 }
 
 body {
@@ -13,24 +117,69 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Skeleton shimmer animation */
+/* ─── Animations ─────────────────────────────────────────── */
+
 @keyframes shimmer {
-  0% {
-    background-position: 200% 0;
-  }
-  100% {
-    background-position: -200% 0;
-  }
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
 }
 
-/* Content transition */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.5; }
+}
+
 @keyframes contentReveal {
   from { opacity: 0; }
   to   { opacity: 1; }
 }
 
-/* ─── Global Scrollbar (desktop) ─────────────────────────── */
-/* 上下ボタン付き、シンプルで見やすい scrollbar */
+@keyframes popupIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ─── Skeleton shimmer utility ───────────────────────────── */
+
+.skim {
+  background: linear-gradient(
+    90deg,
+    var(--color-surface-skeleton)     25%,
+    var(--color-surface-skeleton-mid) 50%,
+    var(--color-surface-skeleton)     75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+/* ─── Tab transition (always-mounted) ───────────────────── */
+/* opacity の変化にトランジションをかける。
+   非アクティブタブは opacity:0、アクティブは opacity:1。
+   position:absolute / relative の切り替えは transition 対象外。 */
+
+.tab-panel-enter {
+  transition: opacity 0.15s ease;
+}
+
+
+.list-item {
+  background: var(--color-surface-muted);
+  transition: background var(--transition-fast);
+  cursor: default;
+}
+
+.list-item:hover {
+  background: var(--color-surface-hover);
+  cursor: pointer;
+}
+
+/* ─── Scrollbar ──────────────────────────────────────────── */
+
+/* ─── Scrollbar styling ──────────────────────────────────── */
+/* iOS Safari は ::-webkit-scrollbar を無視し、OS ネイティブの
+   オーバーレイバーを使う。スクロール中のみ表示されスクロール停止後
+   ~0.5秒で消えるのは CSS で変更不可の OS 仕様。
+   以下のスタイルは Chrome/Edge（デスクトップ）のみに適用される。  */
 
 ::-webkit-scrollbar {
   width: 12px;
@@ -38,10 +187,8 @@ body {
 
 ::-webkit-scrollbar-track {
   background: #f1f1f1;
-  border-radius: 0;
 }
 
-/* 上ボタン */
 ::-webkit-scrollbar-button:single-button:vertical:decrement {
   height: 12px;
   background: #e0e0e0;
@@ -57,7 +204,6 @@ body {
   background-color: #d0d0d0;
 }
 
-/* 下ボタン */
 ::-webkit-scrollbar-button:single-button:vertical:increment {
   height: 12px;
   background: #e0e0e0;
@@ -73,7 +219,6 @@ body {
   background-color: #d0d0d0;
 }
 
-/* Thumb */
 ::-webkit-scrollbar-thumb {
   background: #c0c0c0;
   border: 2px solid #f1f1f1;
@@ -84,7 +229,6 @@ body {
   background: #a0a0a0;
 }
 
-/* ─── Firefox scrollbar ─────────────────────────────────── */
 * {
   scrollbar-width: thin;
   scrollbar-color: #c0c0c0 #f1f1f1;

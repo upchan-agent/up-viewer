@@ -4,7 +4,10 @@ import { useUpProvider } from '@/lib/up-provider';
 import { useProfile } from '@lsp-indexer/react';
 import { toGatewayUrl } from '@/lib/utils';
 import { useResolvedProfileImage } from '@/lib/profile-image-cache';
-import { useState, useEffect } from 'react';
+
+// ── document.createElement('style') は globals.css に集約済み ──
+// shimmer / pulse keyframes は globals.css で定義。
+// .skim クラスをスケルトン要素に付与する。
 
 export function ProfileCard({
   address: propAddress,
@@ -23,7 +26,6 @@ export function ProfileCard({
     isConnecting,
     connect,
     viewMode,
-    accounts,
     provider,
     isDetecting,
   } = useUpProvider();
@@ -34,11 +36,10 @@ export function ProfileCard({
     address: activeAddress || '',
   });
 
-  // ─── Profile image resolution (same as SocialGraph) ──────
-  // Priority: 1. useProfile.profileImage  2. erc725 fallback  3. useProfile.avatar
+  // ── 画像解決（Priority: indexer → erc725 → avatar）──
   const indexerProfileUrl = toGatewayUrl(profile?.profileImage?.[0]?.url ?? '') ?? undefined;
-  const indexerBgUrl = toGatewayUrl(profile?.backgroundImage?.[0]?.url ?? '') ?? undefined;
-  const indexerAvatarUrl = toGatewayUrl(profile?.avatar?.[0]?.url ?? '') ?? undefined;
+  const indexerBgUrl      = toGatewayUrl(profile?.backgroundImage?.[0]?.url ?? '') ?? undefined;
+  const indexerAvatarUrl  = toGatewayUrl(profile?.avatar?.[0]?.url ?? '') ?? undefined;
 
   const resolved = useResolvedProfileImage({
     address: activeAddress || '',
@@ -47,7 +48,7 @@ export function ProfileCard({
     indexerAvatarUrl,
   });
 
-  const profileImageUrl = resolved?.profileImageUrl ?? undefined;
+  const profileImageUrl    = resolved?.profileImageUrl ?? undefined;
   const backgroundImageUrl = resolved?.backgroundImageUrl ?? undefined;
 
   const handleSwitch = async () => {
@@ -60,52 +61,61 @@ export function ProfileCard({
   };
 
   const hasProfile = activeAddress && !isProfileLoading && profile;
-  const name = profile?.name || 'Unknown';
-  const initials = name.charAt(0).toUpperCase();
-  const isLoading = isProfileLoading || resolved === undefined;
+  const name       = profile?.name || 'Unknown';
+  const initials   = name.charAt(0).toUpperCase();
+  const isLoading  = isProfileLoading || resolved === undefined;
 
   return (
     <div style={styles.card}>
-      {/* Background image — absolute positioned, card size unchanged */}
+      {/* 背景画像 — absolute で位置取りし、カードサイズに影響しない */}
       {!isLoading && backgroundImageUrl && (
         <div style={styles.bgWrapper}>
           <img
             src={backgroundImageUrl}
             alt=""
             style={styles.bgImg}
-            onLoad={(e) => { (e.target as HTMLImageElement).style.opacity = '1'; }}
+            onLoad={(e)  => { (e.target as HTMLImageElement).style.opacity = '1'; }}
             onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
           />
         </div>
       )}
 
-      {/* Connection Status Section — always renders */}
+      {/* ── 接続バー ──────────────────────────────────────────
+          固定高さ（--conn-bar-height）で常にスペースを確保する。
+          コンテンツの有無でカードが伸縮しないよう height を固定。  */}
       <div style={styles.connectionSection}>
-        {/* ── View Mode: override all normal states ── */}
+
+        {/* View Mode */}
         {isViewMode && onExitViewMode && (
           <div style={styles.viewModeRow}>
-            <span style={styles.viewModeIcon}>👀</span>
+            <span style={styles.connIcon}>👀</span>
             <span style={styles.viewModeText}>View mode</span>
           </div>
         )}
         {isViewMode && onExitViewMode && (
-          <button onClick={onExitViewMode} style={{ ...styles.exitButton, paddingRight: '6px' }} aria-label="Exit view mode">
+          <button
+            onClick={onExitViewMode}
+            style={styles.exitButton}
+            aria-label="Exit view mode"
+          >
             Exit
           </button>
         )}
 
-        {/* ── Normal states (hidden in view mode) ── */}
+        {/* 通常状態（View Mode 時は非表示）*/}
         {!isViewMode && (
           <>
             {isDetecting && (
-              <div style={styles.skeletonRow}>
-                <div style={styles.skeletonIcon} />
-                <div style={styles.skeletonText} />
+              <div style={styles.connRow}>
+                {/* .skim クラスで shimmer アニメーション（globals.css 定義）*/}
+                <div className="skim" style={styles.skeletonIcon} />
+                <div className="skim" style={styles.skeletonText} />
               </div>
             )}
+
             {viewMode === 'wallet' && (
-              <div style={styles.connectedRow}>
-                <span style={styles.connectedIcon}>🟢</span>
+              <div style={styles.connRow}>
+                <span style={styles.connIcon}>🟢</span>
                 <span style={styles.connectedText}>
                   {isMiniApp ? 'Connected via Grid' : 'Connected'}
                 </span>
@@ -116,15 +126,17 @@ export function ProfileCard({
                 )}
               </div>
             )}
+
             {viewMode === 'grid' && (
-              <div style={styles.viewingRow}>
-                <span style={styles.viewingIcon}>👀</span>
+              <div style={styles.connRow}>
+                <span style={styles.connIcon}>👀</span>
                 <span style={styles.viewingText}>Viewing via Grid</span>
               </div>
             )}
+
             {!isDetecting && viewMode === 'none' && isMiniApp === false && (
-              <div style={styles.disconnectedRow}>
-                <span style={styles.disconnectedIcon}>🔌</span>
+              <div style={styles.connRow}>
+                <span style={styles.connIcon}>🔌</span>
                 <span style={styles.disconnectedText}>Not connected</span>
                 <button
                   onClick={connect}
@@ -141,64 +153,87 @@ export function ProfileCard({
           </>
         )}
 
-        {/* ── 🔍 Search button — always visible ── */}
+        {/* 🔍 検索ボタン — 常時表示 */}
         {onToggleSearch && (
-          <button onClick={onToggleSearch} style={styles.searchButtonFixed} aria-label="Search UP">
+          <button
+            onClick={onToggleSearch}
+            style={styles.searchButton}
+            aria-label="Search UP"
+          >
             🔍
           </button>
         )}
       </div>
 
-      {/* Profile Section */}
-      {!activeAddress ? (
-        <div style={styles.placeholderSection}>
-          <span style={styles.placeholderIcon}>👤</span>
-          <p style={styles.placeholderText}>No profile connected</p>
-        </div>
-      ) : !hasProfile ? (
-        <div style={styles.placeholderSection}>
-          <span style={styles.placeholderIcon}>👤</span>
-          <p style={styles.placeholderText}>Loading profile...</p>
-        </div>
-      ) : (
-        <div style={styles.profileSection}>
-          {isLoading ? (
-            <div style={styles.avatarPlaceholder}>
-              <span style={styles.loadingSpinner}>⏳</span>
+      {/* ── プロフィールセクション ──────────────────────────────
+          height を固定して、ロード中・未接続・接続済みすべての
+          状態でカード高さが変わらないようにする。
+          placeholderSection も同じ height を持ち、overflow:hidden
+          でコンテンツがはみ出さないようにする。               */}
+      <div style={
+        hasProfile
+          ? styles.profileSection
+          : styles.placeholderSection
+      }>
+        {!activeAddress ? (
+          <>
+            <span style={styles.placeholderIcon}>👤</span>
+            <p style={styles.placeholderText}>No profile connected</p>
+          </>
+        ) : !hasProfile ? (
+          <>
+            <span style={styles.placeholderIcon}>👤</span>
+            <p style={styles.placeholderText}>Loading profile...</p>
+          </>
+        ) : (
+          <>
+            {isLoading ? (
+              <div style={styles.avatarPlaceholder}>
+                <span style={styles.loadingSpinner}>⏳</span>
+              </div>
+            ) : profileImageUrl ? (
+              <img
+                src={profileImageUrl}
+                alt={name}
+                style={styles.avatar}
+                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+              />
+            ) : (
+              <div style={styles.avatarPlaceholder}>{initials}</div>
+            )}
+            <div style={styles.info}>
+              <h2 style={styles.name}>{name}</h2>
+              <p style={styles.address}>{activeAddress}</p>
             </div>
-          ) : profileImageUrl ? (
-            <img src={profileImageUrl} alt={name} style={styles.avatar}
-              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
-          ) : (
-            <div style={styles.avatarPlaceholder}>{initials}</div>
-          )}
-          <div style={styles.info}>
-            <h2 style={styles.name}>{name}</h2>
-            <p style={styles.address}>{activeAddress}</p>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </div>
     </div>
   );
 }
 
+// ─── Styles ──────────────────────────────────────────────────
+// CSS 変数を参照。ハードコード値は globals.css に定義済み。
+
 const styles: { [key: string]: React.CSSProperties } = {
+  // ── カード ──
   card: {
-    padding: '8px',
-    background: 'rgba(255, 255, 255, 0.95)',
-    borderRadius: '16px',
-    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
+    padding: 'var(--card-padding)',
+    background: 'var(--color-surface-card)',
+    borderRadius: 'var(--radius-2xl)',
+    boxShadow: 'var(--shadow-card)',
     position: 'relative',
     overflow: 'hidden',
+    flexShrink: 0,  // content (flex column) の中で縮ませない
   },
+
+  // ── 背景画像 ──
   bgWrapper: {
     position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
+    top: 0, left: 0, right: 0,
     height: '100%',
     overflow: 'hidden',
-    borderRadius: '16px',
+    borderRadius: 'var(--radius-2xl)',
     zIndex: 0,
   },
   bgImg: {
@@ -207,239 +242,245 @@ const styles: { [key: string]: React.CSSProperties } = {
     objectFit: 'cover',
     objectPosition: 'center',
     opacity: 0,
-    transition: 'opacity 0.3s ease',
+    transition: `opacity var(--transition-normal)`,
   },
+
+  // ── 接続バー ──
+  // height を固定することで、コンテンツが変わってもカードが伸縮しない
   connectionSection: {
     position: 'relative',
     zIndex: 1,
     display: 'flex',
     alignItems: 'center',
-    minHeight: '18px',
+    height: 'var(--conn-bar-height)',  // ← 固定高さ（旧: minHeight: '18px'）
+    overflow: 'hidden',
   },
-  /* ─── View Mode ─── */
+
+  // 各状態の行（高さは connectionSection に依存）
+  connRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 'var(--space-1)',
+    flex: 1,
+    overflow: 'hidden',
+  },
   viewModeRow: {
     display: 'flex',
     alignItems: 'center',
-    gap: '6px',
-    height: '18px',
+    gap: 'var(--space-1)',
+    flex: 1,
+    overflow: 'hidden',
   },
-  viewModeIcon: { fontSize: '0.9rem', flexShrink: 0 },
+
+  // アイコン（絵文字サイズを明示）
+  connIcon: {
+    fontSize: '0.9rem',
+    flexShrink: 0,
+    lineHeight: 1,
+  },
+
+  // テキスト各種
   viewModeText: {
-    fontSize: '0.75rem',
-    color: '#3182ce',
+    fontSize: 'var(--text-sm)',
+    color: 'var(--color-text-viewmode)',
+    fontWeight: '600',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  connectedText: {
+    fontSize: 'var(--text-sm)',
+    color: 'var(--color-text-connected)',
     fontWeight: '600',
     whiteSpace: 'nowrap',
   },
-  exitButton: {
-    position: 'absolute',
-    right: '4px',
-    top: '0',
-    height: '18px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: '0 6px',
-    background: '#fed7d7',
-    border: 'none',
-    borderRadius: '6px',
-    color: '#e53e3e',
-    fontSize: '0.7rem',
+  viewingText: {
+    fontSize: 'var(--text-sm)',
+    color: 'var(--color-text-viewing)',
     fontWeight: '600',
-    cursor: 'pointer',
-    flexShrink: 0,
-    zIndex: 2,
-    boxSizing: 'border-box',
+    whiteSpace: 'nowrap',
   },
-  /* ─── Search Button ─── */
-  searchButtonFixed: {
-    position: 'absolute',
-    right: '4px',
-    top: '0',
-    width: '28px',
-    height: '18px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 0,
-    background: 'rgba(255,255,255,0.8)',
-    border: '1px solid #e2e8f0',
-    borderRadius: '6px',
-    fontSize: '0.85rem',
-    cursor: 'pointer',
-    flexShrink: 0,
-    zIndex: 2,
-    boxSizing: 'border-box',
+  disconnectedText: {
+    fontSize: 'var(--text-sm)',
+    color: 'var(--color-text-muted)',
+    whiteSpace: 'nowrap',
   },
-  /* ─── Skeleton ─── */
-  skeletonRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-    height: '18px',
-  },
+
+  // ── スケルトン ──
   skeletonIcon: {
-    width: '18px',
-    height: '18px',
-    borderRadius: '50%',
-    background: 'linear-gradient(90deg, #e0e0e0 25%, #d0d0d0 50%, #e0e0e0 75%)',
-    backgroundSize: '200% 100%',
-    animation: 'shimmer 1.5s infinite',
+    width: 'var(--avatar-size-sm)',
+    height: 'var(--avatar-size-sm)',
+    borderRadius: 'var(--radius-full)',
     flexShrink: 0,
   },
   skeletonText: {
     width: '120px',
     height: '12px',
-    borderRadius: '4px',
-    background: 'linear-gradient(90deg, #e0e0e0 25%, #d0d0d0 50%, #e0e0e0 75%)',
-    backgroundSize: '200% 100%',
-    animation: 'shimmer 1.5s infinite',
+    borderRadius: 'var(--radius-xs)',
   },
-  /* ─── Connected ─── */
-  connectedRow: {
+
+  // ── ボタン群 ──
+  exitButton: {
+    position: 'absolute',
+    right: 'var(--space-1)',
+    top: 0,
+    height: 'var(--conn-bar-height)',
     display: 'flex',
     alignItems: 'center',
-    gap: '6px',
-    height: '18px',
-  },
-  connectedIcon: { fontSize: '0.9rem', flexShrink: 0 },
-  connectedText: {
-    fontSize: '0.75rem',
-    color: '#48bb78',
+    padding: '0 var(--space-1)',
+    background: 'var(--color-surface-danger-light)',
+    border: 'none',
+    borderRadius: 'var(--radius-sm)',
+    color: 'var(--color-text-danger)',
+    fontSize: 'var(--text-xs)',
     fontWeight: '600',
-    whiteSpace: 'nowrap',
+    cursor: 'pointer',
+    flexShrink: 0,
+    zIndex: 2,
+    boxSizing: 'border-box',
+  },
+  searchButton: {
+    position: 'absolute',
+    right: 'var(--space-1)',
+    top: 0,
+    width: '28px',
+    height: 'var(--conn-bar-height)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 0,
+    background: 'rgba(255,255,255,0.8)',
+    border: `1px solid var(--color-border-default)`,
+    borderRadius: 'var(--radius-sm)',
+    fontSize: '0.85rem',
+    cursor: 'pointer',
+    flexShrink: 0,
+    zIndex: 2,
+    boxSizing: 'border-box',
   },
   switchButton: {
     marginLeft: 'auto',
     marginRight: '34px',
-    height: '18px',
+    height: 'var(--conn-bar-height)',
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'center',
-    padding: '2px 8px',
-    background: '#e2e8f0',
+    padding: '2px var(--space-2)',
+    background: 'var(--color-border-default)',
     border: 'none',
-    borderRadius: '6px',
-    color: '#4a5568',
-    fontSize: '0.7rem',
+    borderRadius: 'var(--radius-sm)',
+    color: 'var(--color-text-secondary)',
+    fontSize: 'var(--text-xs)',
     fontWeight: '600',
     cursor: 'pointer',
     flexShrink: 0,
     boxSizing: 'border-box',
   },
-  /* ─── Grid ─── */
-  viewingRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '6px',
-    height: '18px',
-  },
-  viewingIcon: { fontSize: '0.9rem', flexShrink: 0 },
-  viewingText: {
-    fontSize: '0.75rem',
-    color: '#805ad5',
-    fontWeight: '600',
-    whiteSpace: 'nowrap',
-  },
-  /* ─── Disconnected ─── */
-  disconnectedRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '6px',
-    height: '18px',
-  },
-  disconnectedIcon: { fontSize: '0.9rem', flexShrink: 0 },
-  disconnectedText: {
-    fontSize: '0.75rem',
-    color: '#718096',
-    whiteSpace: 'nowrap',
-  },
   connectButton: {
     marginRight: '34px',
-    height: '18px',
+    height: 'var(--conn-bar-height)',
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'center',
-    padding: '2px 12px',
-    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+    padding: '2px var(--space-3)',
+    background: 'var(--gradient-brand)',
     border: 'none',
-    borderRadius: '6px',
-    color: '#ffffff',
-    fontSize: '0.7rem',
+    borderRadius: 'var(--radius-sm)',
+    color: 'var(--color-text-white)',
+    fontSize: 'var(--text-xs)',
     fontWeight: '700',
     cursor: 'pointer',
     flexShrink: 0,
     boxSizing: 'border-box',
   },
-  connectButtonDisabled: { opacity: 0.6, cursor: 'not-allowed' },
-  /* ─── Profile ─── */
+  connectButtonDisabled: {
+    opacity: 0.6,
+    cursor: 'not-allowed',
+  },
+
+  // ── プロフィールセクション（共通ベース） ──
+  // height 固定 + overflow:hidden で、どの状態でもカード高さが変わらない。
+  // flex row で左にアバター（またはアイコン）、右にテキストを並べる。
+  // これにより placeholder と profile で同じ高さになる。
   placeholderSection: {
     display: 'flex',
-    flexDirection: 'column',
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: '6px',
-    minHeight: '56px',
+    gap: 'var(--space-3)',
+    height: 'var(--profile-section-height)',
+    overflow: 'hidden',
     position: 'relative',
     zIndex: 1,
+    paddingTop: 'var(--space-1)',
   },
-  placeholderIcon: { fontSize: '1.5rem' },
-  placeholderText: { margin: 0, fontSize: '0.75rem', color: '#a0aec0' },
+  placeholderIcon: {
+    fontSize: '1.5rem',
+    flexShrink: 0,
+    width: 'var(--avatar-size-lg)',  // avatar と同幅でアライン揃え
+    textAlign: 'center',
+  },
+  placeholderText: {
+    margin: 0,
+    fontSize: 'var(--text-base)',
+    color: 'var(--color-text-faint)',
+  },
+
   profileSection: {
     display: 'flex',
+    flexDirection: 'row',
     alignItems: 'center',
-    gap: '12px',
-    minHeight: '56px',
+    gap: 'var(--space-3)',
+    height: 'var(--profile-section-height)',
+    overflow: 'hidden',
     position: 'relative',
     zIndex: 1,
+    paddingTop: 'var(--space-1)',
   },
+
+  // ── アバター ──
   avatar: {
-    width: '56px',
-    height: '56px',
-    borderRadius: '50%',
+    width: 'var(--avatar-size-lg)',
+    height: 'var(--avatar-size-lg)',
+    borderRadius: 'var(--radius-full)',
     objectFit: 'cover',
     border: '3px solid rgba(255,255,255,0.8)',
-    boxShadow: '0 2px 8px rgba(0,0,0,0.12)',
+    boxShadow: 'var(--shadow-avatar)',
+    flexShrink: 0,
   },
   avatarPlaceholder: {
-    width: '56px',
-    height: '56px',
-    borderRadius: '50%',
-    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+    width: 'var(--avatar-size-lg)',
+    height: 'var(--avatar-size-lg)',
+    borderRadius: 'var(--radius-full)',
+    background: 'var(--gradient-brand)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     fontSize: '1.5rem',
     fontWeight: 'bold',
-    color: '#ffffff',
+    color: 'var(--color-text-white)',
     border: '3px solid rgba(255,255,255,0.3)',
+    flexShrink: 0,
   },
   loadingSpinner: {
     fontSize: '1.2rem',
+    // pulse アニメーションは globals.css @keyframes pulse で定義
     animation: 'pulse 1.5s ease-in-out infinite',
   },
+
+  // ── テキスト情報 ──
   info: { flex: 1, minWidth: 0 },
   name: {
     margin: '0 0 2px 0',
-    fontSize: '0.85rem',
+    fontSize: 'var(--text-md)',
     fontWeight: '700',
-    color: '#1a202c',
+    color: 'var(--color-text-primary)',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   },
   address: {
     margin: 0,
-    fontSize: '0.7rem',
-    color: '#718096',
+    fontSize: 'var(--text-sm)',
+    color: 'var(--color-text-muted)',
     fontFamily: 'monospace',
     wordBreak: 'break-all',
   },
 };
-
-// Inject keyframes once
-if (typeof document !== 'undefined' && !document.getElementById('profilecard-keyframes')) {
-  const s = document.createElement('style');
-  s.id = 'profilecard-keyframes';
-  s.textContent = '@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}';
-  document.head.appendChild(s);
-}

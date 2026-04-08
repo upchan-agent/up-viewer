@@ -4,14 +4,24 @@ import { useUpProvider } from '@/lib/up-provider';
 import { LUKSO_RPC_URL } from '@/lib/constants';
 import { useInfiniteOwnedAssets, useInfiniteOwnedTokens, useNft } from '@lsp-indexer/react';
 import { toGatewayUrl } from '@/lib/utils';
-import { useLayoutEffect, useEffect, useState, useMemo, useCallback, useRef, memo } from 'react';
+import { useEffect, useState, useMemo, useCallback, useRef, memo } from 'react';
 import { ethers } from 'ethers';
 import { Popup } from '@/components/Popup';
 import type { PopupLink } from '@/components/Popup';
-import { useVirtualizer } from '@tanstack/react-virtual';
+import {
+  useAssetImage,
+  apiFetch,
+  apiSubscribe,
+  fetchAssetImage,
+  fetchTokenImage,
+  setAssetCachePopupOpen,
+  _apiCache,
+} from '@/lib/asset-image-cache';
+import type { ResolvedIcon, ResolvedAssetImage } from '@/lib/asset-image-cache';
 
 interface AssetListProps {
   address?: `0x${string}`;
+  active?: boolean;  // true のとき初回フェッチを許可（hasBeenActive パターン）
 }
 
 // ─── helpers ────────────────────────────────────────────────
@@ -46,147 +56,6 @@ const toTokenIdHex = (tid: string): string => {
   if (!digits) return '0x' + tid.padStart(64, '0').slice(-64);
   return '0x' + BigInt(digits).toString(16).padStart(64, '0');
 };
-
-const INDEXER_URL = 'https://envio.lukso-mainnet.universal.tech/v1/graphql';
-
-// ─── Rate limiter: max 3 concurrent fetches ─────────────────
-let _activeFetches = 0;
-const _fetchQueue: { fn: () => Promise<string | null>; resolve: (v: string | null) => void; reject: (e: any) => void }[] = [];
-
-function _drainQueue() {
-  while (_activeFetches < 3 && _fetchQueue.length > 0) {
-    _activeFetches++;
-    const { fn, resolve, reject } = _fetchQueue.shift()!;
-    fn().then(resolve).catch(reject).finally(() => { _activeFetches--; _drainQueue(); });
-  }
-}
-
-function fetchWithLimit(fn: () => Promise<string | null>): Promise<string | null> {
-  return new Promise((resolve, reject) => {
-    _fetchQueue.push({ fn: () => fetchWithRetry(fn), resolve, reject });
-    _drainQueue();
-  });
-}
-
-const MAX_RETRIES = 2;
-async function fetchWithRetry(fn: () => Promise<string | null>): Promise<string | null> {
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      return await fn();
-    } catch {
-      if (attempt < MAX_RETRIES) await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
-    }
-  }
-  return null;
-}
-
-// ─── API fetchers ──────────────────────────────────────────
-
-async function fetchAssetImage(addr: string): Promise<string | null> {
-  const query = `{Asset(where:{id:{_eq:"${addr.toLowerCase()}"}},limit:1){icons{url}images{url}url}}`;
-  const res = await fetch(INDEXER_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query }) });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const json = await res.json();
-  const a = json.data?.Asset?.[0];
-  if (a?.icons?.[0]?.url) return toGatewayUrl(a.icons[0].url) ?? null;
-  if (a?.images?.[0]?.url) return toGatewayUrl(a.images[0].url) ?? null;
-  if (a?.url?.startsWith('ipfs://')) return toGatewayUrl(a.url) ?? null;
-  return null;
-}
-
-async function fetchTokenImage(addr: string, tidHex: string): Promise<string | null> {
-  const fullId = `${addr.toLowerCase()}-${tidHex}`;
-  const query = `{Token(where:{id:{_eq:"${fullId}"}},limit:1){images{url}icons{url}}}`;
-  const res = await fetch(INDEXER_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query }) });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const json = await res.json();
-  const t = json.data?.Token?.[0];
-  if (t?.images?.[0]?.url) return toGatewayUrl(t.images[0].url) ?? null;
-  if (t?.icons?.[0]?.url) return toGatewayUrl(t.icons[0].url) ?? null;
-  return null;
-}
-
-// ─── Module-level API image cache ─────────────────────────
-// key → string: resolved URL
-// key → null:   API confirmed no image (don't retry)
-// key absent:   not yet fetched
-//
-// Size-limited to MAX_CACHE_ENTRIES to prevent unbounded memory growth
-// during long sessions (especially relevant on mobile with limited RAM).
-// Eviction is LRU-approximated: when full, the oldest inserted key is dropped.
-const MAX_CACHE_ENTRIES = 500;
-const _apiCache = new Map<string, string | null>();
-const _apiInFlight = new Set<string>();
-
-// Per-key subscriber map.
-// Only the component(s) watching a specific cache key are notified when
-// that key's fetch completes — no global broadcast.
-// This prevents the cascade where 1 fetch completion triggers re-renders
-// across all mounted NftChildItems (was N fetches × N components re-renders).
-const _apiSubs = new Map<string, Set<() => void>>();
-
-function _apiSubscribe(key: string, cb: () => void): () => void {
-  if (!_apiSubs.has(key)) _apiSubs.set(key, new Set());
-  _apiSubs.get(key)!.add(cb);
-  return () => {
-    const subs = _apiSubs.get(key);
-    if (!subs) return;
-    subs.delete(cb);
-    if (subs.size === 0) _apiSubs.delete(key);
-  };
-}
-
-function _apiNotify(key: string) {
-  _apiSubs.get(key)?.forEach(cb => cb());
-}
-
-// Popup open flag — set to true while any popup is visible.
-// _apiFetch checks this flag and defers new fetches while popup is open,
-// preventing background API calls from competing with popup interactions
-// on the main thread (was causing tap delays and slow close on mobile).
-let _isPopupOpen = false;
-const _deferredFetches: Array<{ key: string; fn: () => Promise<string | null> }> = [];
-
-function _setPopupOpen(open: boolean) {
-  _isPopupOpen = open;
-  if (!open && _deferredFetches.length > 0) {
-    // Drain deferred fetches now that popup is closed
-    const pending = _deferredFetches.splice(0);
-    for (const { key, fn } of pending) _apiFetch(key, fn);
-  }
-}
-
-// Initiate a fetch for `key` if not already cached or in-flight.
-// priority=true bypasses the popup gate — used by popup image resolution
-// so the popup's own fetch is never deferred by its own open state.
-// priority=false (default) defers while popup is open to keep main thread free.
-// Transient errors (throw) are not cached — next call will retry.
-function _apiFetch(key: string, fn: () => Promise<string | null>, priority = false) {
-  if (_apiCache.has(key) || _apiInFlight.has(key)) return;
-  if (_isPopupOpen && !priority) {
-    // Defer background fetches until popup closes
-    if (!_deferredFetches.some(d => d.key === key)) _deferredFetches.push({ key, fn });
-    return;
-  }
-  _apiInFlight.add(key);
-  fetchWithLimit(fn)
-    .then(url => {
-      if (_apiCache.size >= MAX_CACHE_ENTRIES) {
-        const oldestKey = _apiCache.keys().next().value;
-        if (oldestKey !== undefined) _apiCache.delete(oldestKey);
-      }
-      _apiCache.set(key, url);
-    })
-    .catch(() => { /* transient error: leave absent so next mount retries */ })
-    .finally(() => { _apiInFlight.delete(key); _apiNotify(key); });
-}
-
-// ─── ResolvedIcon ──────────────────────────────────────────
-
-interface ResolvedIcon {
-  url: string;
-  scheme: string;
-}
 
 function resolveDaIcon(item: any): ResolvedIcon | null {
   if (!item) return null;
@@ -258,12 +127,8 @@ const isColl = (x: NftRenderItem): x is NftCollEntry => 'isCollection' in x && x
 
 const NFT_HOOK_TIMEOUT_MS = 5000;
 
-interface ResolvedNftImage {
-  url: string;
-  scheme: string;
-  debug: string[];
-}
-
+// ResolvedAssetImage は @/lib/asset-image-cache から import 済み
+// (旧 ResolvedAssetImage と同一定義)
 function useLsp8ChildImage({
   contractAddress,
   formattedTokenId,
@@ -276,7 +141,7 @@ function useLsp8ChildImage({
   collectionFallbackIcon?: ResolvedIcon;
   nftIndexerData?: any;
   isPopupContext?: boolean;
-}): ResolvedNftImage | undefined {
+}): ResolvedAssetImage | undefined {
   const contractAddressLower = contractAddress.toLowerCase();
   const tokenIdHex = toTokenIdHex(formattedTokenId);
   const imageCacheKey = `lsp8:${contractAddressLower}:${tokenIdHex}`;
@@ -305,16 +170,15 @@ function useLsp8ChildImage({
 
   // Per-key subscription — only re-renders when this component's own fetch completes
   const [, setTick] = useState(0);
-  useEffect(() => _apiSubscribe(imageCacheKey, () => setTick(t => t + 1)), [imageCacheKey]);
+  useEffect(() => apiSubscribe(imageCacheKey, () => setTick(t => t + 1)), [imageCacheKey]);
 
   // Kick off API fetch once useNft settles
   useEffect(() => {
     if (nftHookIsLoading) return;
-    if (_apiCache.has(imageCacheKey) || _apiInFlight.has(imageCacheKey)) return;
     const nftMetadata = nftData as any;
     const nftImages = nftMetadata ? flattenImages(nftMetadata) : [];
     if (nftImages.some(isUsableIpfs)) return;
-    _apiFetch(imageCacheKey, () => fetchTokenImage(contractAddressLower, tokenIdHex), isPopupContext);
+    apiFetch(imageCacheKey, () => fetchTokenImage(contractAddressLower, tokenIdHex), isPopupContext);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nftHookIsLoading, imageCacheKey]);
 
@@ -399,11 +263,11 @@ function useLsp8CollectionImage({
   const imageCacheKey = `lsp8coll:${collectionAddress.toLowerCase()}`;
 
   const [, setTick] = useState(0);
-  useEffect(() => _apiSubscribe(imageCacheKey, () => setTick(t => t + 1)), [imageCacheKey]);
+  useEffect(() => apiSubscribe(imageCacheKey, () => setTick(t => t + 1)), [imageCacheKey]);
 
   useEffect(() => {
     if (collectionIcon) return;
-    _apiFetch(imageCacheKey, () => fetchAssetImage(collectionAddress));
+    apiFetch(imageCacheKey, () => fetchAssetImage(collectionAddress));
   }, [imageCacheKey, collectionAddress, collectionIcon]);
 
   const debug: string[] = [];
@@ -419,132 +283,63 @@ function useLsp8CollectionImage({
   return { icon: undefined, debug };
 }
 
-// ─── useTokenImage ─────────────────────────────────────────
-// Resolves an image for a fungible Token (LSP7 TOKEN type).
-// Priority chain:
-//   1. ownedAsset indexer icons   (resolveDaIcon → digitalAsset.icons)
-//   2. ownedAsset indexer images  (resolveDaIcon → digitalAsset.images)
-//   3. api.Asset                  (fetchAssetImage fallback)
-//
-// The indexerIcon is the result of resolveDaIcon() already split into
-// its two sub-sources for debug transparency.
-// All levels always evaluated before returning.
+// ─── TokenListItem ─────────────────────────────────────────
+// モジュールレベル定義により、AssetList 再レンダー時の
+// 不要なアンマウント→マウントを防ぐ（hooks のステートリセット回避）。
 
-function useTokenImage({
-  contractAddress,
-  indexerIcon,
-  isPopupContext = false,
-}: {
-  contractAddress: string;
-  indexerIcon?: ResolvedIcon;
-  isPopupContext?: boolean;
-}): ResolvedNftImage | undefined {
-  const imageCacheKey = `token:${contractAddress.toLowerCase()}`;
-
-  const [, setTick] = useState(0);
-  useEffect(() => _apiSubscribe(imageCacheKey, () => setTick(t => t + 1)), [imageCacheKey]);
-
-  useEffect(() => {
-    if (indexerIcon) return;
-    _apiFetch(imageCacheKey, () => fetchAssetImage(contractAddress), isPopupContext);
-  }, [imageCacheKey, contractAddress, indexerIcon, isPopupContext]);
-
-  const debug: string[] = [];
-
-  // 1st: ownedAsset.digitalAsset.icons
-  const indexerIconsUrl = indexerIcon?.scheme === 'ownedAsset.digitalAsset.icons' ? indexerIcon.url : undefined;
-  debug.push(`1st ownedAsset.digitalAsset.icons: ${indexerIconsUrl ? '✓ ' + indexerIconsUrl : '(none)'}`);
-
-  // 2nd: ownedAsset.digitalAsset.images
-  const indexerImagesUrl = indexerIcon?.scheme === 'ownedAsset.digitalAsset.images' ? indexerIcon.url : undefined;
-  debug.push(`2nd ownedAsset.digitalAsset.images: ${indexerImagesUrl ? '✓ ' + indexerImagesUrl : '(none)'}`);
-
-  // 3rd: api.Asset
-  const cachedImageUrl = _apiCache.has(imageCacheKey) ? _apiCache.get(imageCacheKey) : undefined;
-  const isCacheSettled = cachedImageUrl !== undefined;
-  debug.push(`3rd api.Asset: ${!isCacheSettled ? '(pending...)' : cachedImageUrl ? '✓ ' + cachedImageUrl : '(null)'}`);
-
-  // Select winner
-  if (indexerIconsUrl) {
-    debug.push(`selected: 1st`);
-    return { url: indexerIconsUrl, scheme: 'ownedAsset.digitalAsset.icons', debug };
-  }
-  if (indexerImagesUrl) {
-    debug.push(`selected: 2nd`);
-    return { url: indexerImagesUrl, scheme: 'ownedAsset.digitalAsset.images', debug };
-  }
-  if (!isCacheSettled) return undefined; // waiting for API
-  if (cachedImageUrl) {
-    debug.push(`selected: 3rd`);
-    return { url: cachedImageUrl, scheme: 'api.Asset', debug };
-  }
-
-  debug.push(`selected: none`);
-  return { url: '', scheme: 'none', debug };
+function TokenListItem({ item, onSelect }: {
+  item: TokenItem;
+  onSelect: (type: 'token' | 'nft', addr: string, tid?: string, e?: React.MouseEvent) => void;
+}) {
+  const resolved = useAssetImage({
+    type: 'token',
+    contractAddress: item.contractAddress,
+    indexerIcon: item.indexerIcon,
+  });
+  const displayIcon = resolved?.url ? resolved : undefined;
+  return (
+    <div
+      className="list-item"
+      style={styles.item}
+      onClick={(e) => onSelect('token', item.contractAddress, undefined, e)}
+    >
+      {renderIcon(displayIcon, '💎')}
+      <div style={styles.itemInfo}>
+        <span style={styles.itemName}>{item.name}</span>
+        <span style={styles.itemSymbol}>{item.symbol}</span>
+      </div>
+      <div style={styles.itemAmount}>{formatTokenAmount(item.amount || '0')} {item.symbol}</div>
+      <span style={styles.expandIcon}>›</span>
+    </div>
+  );
 }
 
-// ─── useLsp7SingleNftImage ──────────────────────────────────
-// Resolves an image for a LSP7 Single NFT (tokenType: NFT or COLLECTION,
-// no individual token IDs — held as a single ownedAsset entry).
-// Priority chain is identical to useTokenImage:
-//   1. ownedAsset indexer icons
-//   2. ownedAsset indexer images
-//   3. api.Asset
-//
-// Kept as a separate hook (rather than reusing useTokenImage) so that
-// the cache key namespace is distinct and debug labels are accurate.
+// ─── Lsp7SingleNftListItem ──────────────────────────────────
 
-function useLsp7SingleNftImage({
-  contractAddress,
-  indexerIcon,
-  isPopupContext = false,
-}: {
-  contractAddress: string;
-  indexerIcon?: ResolvedIcon;
-  isPopupContext?: boolean;
-}): ResolvedNftImage | undefined {
-  const imageCacheKey = `lsp7nft:${contractAddress.toLowerCase()}`;
-
-  const [, setTick] = useState(0);
-  useEffect(() => _apiSubscribe(imageCacheKey, () => setTick(t => t + 1)), [imageCacheKey]);
-
-  useEffect(() => {
-    if (indexerIcon) return;
-    _apiFetch(imageCacheKey, () => fetchAssetImage(contractAddress), isPopupContext);
-  }, [imageCacheKey, contractAddress, indexerIcon, isPopupContext]);
-
-  const debug: string[] = [];
-
-  // 1st: ownedAsset.digitalAsset.icons
-  const indexerIconsUrl = indexerIcon?.scheme === 'ownedAsset.digitalAsset.icons' ? indexerIcon.url : undefined;
-  debug.push(`1st ownedAsset.digitalAsset.icons: ${indexerIconsUrl ? '✓ ' + indexerIconsUrl : '(none)'}`);
-
-  // 2nd: ownedAsset.digitalAsset.images
-  const indexerImagesUrl = indexerIcon?.scheme === 'ownedAsset.digitalAsset.images' ? indexerIcon.url : undefined;
-  debug.push(`2nd ownedAsset.digitalAsset.images: ${indexerImagesUrl ? '✓ ' + indexerImagesUrl : '(none)'}`);
-
-  // 3rd: api.Asset
-  const cachedImageUrl = _apiCache.has(imageCacheKey) ? _apiCache.get(imageCacheKey) : undefined;
-  const isCacheSettled = cachedImageUrl !== undefined;
-  debug.push(`3rd api.Asset: ${!isCacheSettled ? '(pending...)' : cachedImageUrl ? '✓ ' + cachedImageUrl : '(null)'}`);
-
-  // Select winner
-  if (indexerIconsUrl) {
-    debug.push(`selected: 1st`);
-    return { url: indexerIconsUrl, scheme: 'ownedAsset.digitalAsset.icons', debug };
-  }
-  if (indexerImagesUrl) {
-    debug.push(`selected: 2nd`);
-    return { url: indexerImagesUrl, scheme: 'ownedAsset.digitalAsset.images', debug };
-  }
-  if (!isCacheSettled) return undefined;
-  if (cachedImageUrl) {
-    debug.push(`selected: 3rd`);
-    return { url: cachedImageUrl, scheme: 'api.Asset', debug };
-  }
-
-  debug.push(`selected: none`);
-  return { url: '', scheme: 'none', debug };
+function Lsp7SingleNftListItem({ item, onSelect }: {
+  item: NftListEntry;
+  onSelect: (type: 'token' | 'nft', addr: string, tid?: string, e?: React.MouseEvent) => void;
+}) {
+  const resolved = useAssetImage({
+    type: 'lsp7nft',
+    contractAddress: item.contractAddress,
+    indexerIcon: item.collectionFallbackIcon,
+  });
+  const displayIcon = resolved?.url ? resolved : undefined;
+  return (
+    <div
+      className="list-item"
+      style={styles.item}
+      onClick={(e) => onSelect('nft', item.contractAddress, item.tokenId, e)}
+    >
+      {renderIcon(displayIcon, '🖼️')}
+      <div style={styles.itemInfo}>
+        <span style={styles.itemName}>{item.name}</span>
+        <span style={styles.itemSymbol}>{item.amount ? `${item.amount} ${item.symbol}` : item.symbol}</span>
+      </div>
+      <span style={styles.expandIcon}>›</span>
+    </div>
+  );
 }
 
 // ─── NftChildItem ──────────────────────────────────────────
@@ -563,10 +358,11 @@ function NftChildItem({ entry, collectionFallbackIcon, handleSelectAsset }: {
   const displayIcon = resolved?.url ? resolved : undefined;
 
   return (
-    <div style={{ ...styles.item, marginLeft: '12px' }}
+    <div
+      className="list-item"
+      style={{ ...styles.item, marginLeft: '12px' }}
       onClick={(e) => handleSelectAsset('nft', entry.contractAddress, entry.tokenId, e)}
-      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#edf2f7'; (e.currentTarget as HTMLElement).style.cursor = 'pointer'; }}
-      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = '#f7fafc'; }}>
+    >
       {renderIcon(displayIcon, '🖼️')}
       <div style={styles.itemInfo}>
         <span style={styles.itemName}>{entry.name}</span>
@@ -594,15 +390,17 @@ function NftSectionHeaderRow({ label, protocol, count, sectionKey, isExpanded, o
   isExpanded: boolean; onToggle: (key: string) => void;
 }) {
   return (
-    <div style={{ background: '#f8fafc', marginBottom: '2px', height: '32px', display: 'flex', alignItems: 'center' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }}
+    <div style={{ background: 'var(--color-surface-nft-header)', height: '32px', display: 'flex', alignItems: 'center' }}>
+      <div
+        style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', cursor: 'pointer', userSelect: 'none', opacity: 1, transition: `opacity var(--transition-fast)`, width: '100%' }}
         onClick={() => onToggle(sectionKey)}
         onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.opacity = '0.7'; }}
-        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.opacity = '1'; }}>
+        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.opacity = '1'; }}
+      >
         <span style={{ ...styles.expandIcon, transform: isExpanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>▶</span>
-        <span style={{ fontSize: '0.75rem', fontWeight: '700', color: '#4a5568', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</span>
-        <span style={{ fontSize: '0.65rem', color: '#a0aec0', fontWeight: '500' }}>{protocol}</span>
-        <span style={{ fontSize: '0.65rem', color: '#cbd5e0', fontWeight: '600', marginLeft: 'auto' }}>{count}</span>
+        <span style={{ fontSize: 'var(--text-base)', fontWeight: '700', color: 'var(--color-text-section)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</span>
+        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-faint)', fontWeight: '500' }}>{protocol}</span>
+        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-border-muted)', fontWeight: '600', marginLeft: 'auto' }}>{count}</span>
       </div>
     </div>
   );
@@ -620,80 +418,84 @@ function NftCollectionHeaderRow({ coll, isExpanded, onToggle, renderIcon }: {
     collectionIcon: coll.collectionIcon,
   });
   return (
-    <div style={{ ...styles.item, fontWeight: 600 }} onClick={() => onToggle(coll.id)}
-      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#edf2f7'; (e.currentTarget as HTMLElement).style.cursor = 'pointer'; }}
-      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = '#f7fafc'; }}>
+    <div
+      className="list-item"
+      style={{ ...styles.item, fontWeight: 600 }}
+      onClick={() => onToggle(coll.id)}
+    >
       {renderIcon(collIcon, '📂')}
-      <div style={styles.itemInfo}><span style={styles.itemName}>{coll.name}</span><span style={styles.itemSymbol}>{coll.count} NFTs</span></div>
+      <div style={styles.itemInfo}>
+        <span style={styles.itemName}>{coll.name}</span>
+        <span style={styles.itemSymbol}>{coll.count} NFTs</span>
+      </div>
       <span style={{ ...styles.expandIcon, transform: isExpanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>▶</span>
     </div>
   );
 }
 
-// ─── NftVirtualList ────────────────────────────────────────
-// Defined at module level — stable identity prevents useVirtualizer
-// from resetting when AssetList re-renders (which caused scroll-to-top).
+// ─── NftList ───────────────────────────────────────────────
+// displayLimitNfts で表示件数が制御されるため仮想化は不要。
+// 通常リストにすることでスクロールバーが安定し縮小しなくなる。
+// モジュールレベル定義は維持（AssetList 再レンダー時の scroll-to-top を防ぐ）。
+
+function nftRowKey(row: VirtualRow, i: number): string {
+  switch (row.kind) {
+    case 'section-header':    return `sh-${row.sectionKey}`;
+    case 'divider':           return `div-${i}`;
+    case 'collection-header': return `ch-${row.coll.id}`;
+    case 'nft-child':         return `nc-${row.child.id}`;
+    case 'lsp7-single':       return `l7-${row.item.id}`;
+  }
+}
 
 const NftVirtualList = memo(function NftVirtualList({
   rows,
-  listRef,
   renderRow,
-  initialOffset,
 }: {
   rows: VirtualRow[];
-  listRef: React.RefObject<HTMLDivElement | null>;
   renderRow: (row: VirtualRow) => React.ReactNode;
   initialOffset?: number;
 }) {
-  const virtualizer = useVirtualizer({
-    count: rows.length,
-    getScrollElement: () => listRef.current,
-    estimateSize: (index) => {
-      const row = rows[index];
-      if (row.kind === 'divider') return 17;
-      if (row.kind === 'section-header') return 32;
-      return 44;
-    },
-    overscan: 5,
-  });
-
   if (rows.length === 0) return <p style={styles.empty}>No NFTs found</p>;
 
   return (
-    <div style={styles.list} ref={listRef}>
-      <div style={{ height: `${virtualizer.getTotalSize()}px`, width: '100%', position: 'relative' }}>
-        {virtualizer.getVirtualItems().map(virtualItem => (
-          <div
-            key={virtualItem.key}
-            data-index={virtualItem.index}
-            ref={virtualizer.measureElement}
-            style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              width: '100%',
-              transform: `translateY(${virtualItem.start}px)`,
-            }}
-          >
-            {renderRow(rows[virtualItem.index])}
-          </div>
-        ))}
-      </div>
+    <div style={styles.list}>
+      {rows.map((row, i) => (
+        <div key={nftRowKey(row, i)}>
+          {renderRow(row)}
+        </div>
+      ))}
     </div>
   );
 });
 
 // ─── component ─────────────────────────────────────────────
 
-export function AssetList({ address }: AssetListProps) {
+export function AssetList({ address, active = true }: AssetListProps) {
   const { displayAddress } = useUpProvider();
   const targetAddress = address || displayAddress;
+
+  // ── hasBeenActive: 一度でもアクティブになったか ──────────────
+  // 常時マウント環境で、初回タブ訪問まではフェッチを行わない。
+  // 一度アクティブになったら以降はタブを離れてもデータを保持する。
+  // 将来の prefetch 制御や優先度管理もここを起点に拡張できる。
+  const hasBeenActive = useRef(false);
+  if (active) hasBeenActive.current = true;
+  const shouldFetch = hasBeenActive.current;
+
   const [lyxBalance, setLyxBalance] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'tokens' | 'nfts'>('tokens');
   const [searchQuery, setSearchQuery] = useState('');
 
-  const tokenListRef = useRef<HTMLDivElement>(null);
-  const nftListRef = useRef<HTMLDivElement>(null);
+  // 表示件数の制御。Load more = この値を増やすだけ（追加フェッチなし）
+  // addressが変わったらリセット
+  const DISPLAY_PAGE = 200;
+  const [displayLimitTokens, setDisplayLimitTokens] = useState(DISPLAY_PAGE);
+  const [displayLimitNfts,   setDisplayLimitNfts]   = useState(DISPLAY_PAGE);
+  useEffect(() => {
+    setDisplayLimitTokens(DISPLAY_PAGE);
+    setDisplayLimitNfts(DISPLAY_PAGE);
+  }, [targetAddress]);
 
   const [selectedAsset, setSelectedAsset] = useState<{ type: 'token' | 'nft'; address: string; formattedTokenId?: string } | null>(null);
   const [popupPosition, setPopupPosition] = useState<{ top: number; right: number }>({ top: 0, right: 0 });
@@ -706,12 +508,19 @@ export function AssetList({ address }: AssetListProps) {
   }, []);
 
   // ─── Data hooks ──────────────────────────────────────────
+  // 取得層: pageSize:500 + 自動フェッチで全件をメモリに保持。
+  //         検索・総数表示はこの全件データを対象とする。
+  // 表示層: displayLimitAssets / displayLimitTokens で表示件数を制御。
+  //         Load more は追加フェッチではなく表示件数の拡張のみ。
+  //         DOM に乗るのは displayLimit 件数分のみ → 端末負荷を抑制。
+
+  const fetchAddress = shouldFetch ? (targetAddress?.toLowerCase() || '') : '';
 
   const {
     ownedAssets, hasNextPage: hasMoreAssets, fetchNextPage: fetchMoreAssets,
     isFetchingNextPage: loadingMoreAssets,
   } = useInfiniteOwnedAssets({
-    filter: { holderAddress: targetAddress?.toLowerCase() || '' },
+    filter: { holderAddress: fetchAddress },
     include: { balance: true, digitalAsset: { name: true, symbol: true, tokenType: true, decimals: true, icons: true, description: true, totalSupply: true, holderCount: true, images: true, links: true, attributes: true, url: true } },
     pageSize: 500,
   });
@@ -720,13 +529,15 @@ export function AssetList({ address }: AssetListProps) {
     ownedTokens, hasNextPage: hasMoreTokens, fetchNextPage: fetchMoreTokens,
     isFetchingNextPage: loadingMoreTokens,
   } = useInfiniteOwnedTokens({
-    filter: { holderAddress: targetAddress?.toLowerCase() || '' },
+    filter: { holderAddress: fetchAddress },
     include: { digitalAsset: { name: true, symbol: true, tokenType: true, icons: true, description: true, totalSupply: true, holderCount: true, images: true, links: true, attributes: true }, nft: { formattedTokenId: true, name: true, icons: true, description: true, images: true, links: true, attributes: true } },
     pageSize: 500,
   });
 
+  // バックグラウンドで全件フェッチ（表示には影響しない）
   useEffect(() => { if (hasMoreAssets && !loadingMoreAssets) fetchMoreAssets(); }, [hasMoreAssets, loadingMoreAssets, fetchMoreAssets]);
   useEffect(() => { if (hasMoreTokens && !loadingMoreTokens) fetchMoreTokens(); }, [hasMoreTokens, loadingMoreTokens, fetchMoreTokens]);
+
   useEffect(() => {
     if (!targetAddress) return;
     new ethers.JsonRpcProvider(LUKSO_RPC_URL).getBalance(targetAddress).then(b => setLyxBalance(ethers.formatEther(b)));
@@ -748,28 +559,22 @@ export function AssetList({ address }: AssetListProps) {
 
   const handleSelectAsset = useCallback((type: 'token' | 'nft', addr: string, formattedTokenId?: string, e?: React.MouseEvent) => {
     if (e) { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setPopupPosition({ top: r.top + window.scrollY, right: window.innerWidth - r.right + window.scrollX }); }
-    _setPopupOpen(true);
+    setAssetCachePopupOpen(true);
     setSelectedAsset({ type, address: addr, formattedTokenId });
   }, []);
 
   const handleClosePopup = useCallback(() => {
-    _setPopupOpen(false);
+    setAssetCachePopupOpen(false);
     setSelectedAsset(null);
   }, []);
   const toggleCollection = useCallback((id: string) => {
-    // 1. re-render前にscroll位置を保存
-    const el = nftListRef.current;
-    const saved = el ? el.scrollTop : 0;
-    nftScrollByFilter.current[nftFilter] = saved;
-    // 2. state更新 → virtualRowsの再生成 → NftVirtualList re-render
-    setExpandedCollections(prev => { const n = new Set(prev); const k = id.toLowerCase(); n.has(k) ? n.delete(k) : n.add(k); return n; });
-    // 3. DOM更新完了後にscroll復元（rAF 2段）
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        if (el) el.scrollTop = nftScrollByFilter.current[nftFilter] ?? saved;
-      });
+    setExpandedCollections(prev => {
+      const n = new Set(prev);
+      const k = id.toLowerCase();
+      n.has(k) ? n.delete(k) : n.add(k);
+      return n;
     });
-  }, [nftFilter]);
+  }, []);
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') handleClosePopup(); };
@@ -778,6 +583,8 @@ export function AssetList({ address }: AssetListProps) {
   }, [handleClosePopup]);
 
   // ─── Token items ─────────────────────────────────────────
+  // tokenItems: 全件（検索対象・総数表示用）
+  // displayedTokenItems: displayLimitTokens 件に絞った表示用
 
   const tokenItems = useMemo((): TokenItem[] => {
     const lyxItem = { id: 'lyx', name: 'LYX', symbol: 'LYX', amount: lyxBalance || '0', type: 'LYX' as const, contractAddress: '' };
@@ -795,6 +602,11 @@ export function AssetList({ address }: AssetListProps) {
       }));
     return [lyxItem, ...[...items].sort((a, b) => parseFloat(b.amount) - parseFloat(a.amount))];
   }, [lyxBalance, ownedAssets, searchQuery]);
+
+  const displayedTokenItems = useMemo(
+    () => tokenItems.slice(0, displayLimitTokens),
+    [tokenItems, displayLimitTokens],
+  );
 
   // ─── NFT tree ────────────────────────────────────────────
 
@@ -851,46 +663,9 @@ export function AssetList({ address }: AssetListProps) {
     return { nftTree: result.sort((a, b) => (a.name || '').localeCompare(b.name || '')), lsp7Nfts: lsp7Nfts.sort((a, b) => (a.name || '').localeCompare(b.name || '')) };
   }, [ownedTokens, ownedAssets, searchQuery]);
 
-  // ─── Token list item (sub-component for hook usage) ─────
-
-  function TokenListItem({ item }: { item: TokenItem }) {
-    const resolved = useTokenImage({
-      contractAddress: item.contractAddress,
-      indexerIcon: item.indexerIcon,
-    });
-    const displayIcon = resolved?.url ? resolved : undefined;
-    return (
-      <div style={styles.item}
-        onClick={(e) => handleSelectAsset('token' as const, item.contractAddress, undefined, e)}
-        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#edf2f7'; (e.currentTarget as HTMLElement).style.cursor = 'pointer'; }}
-        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = '#f7fafc'; }}>
-        {renderIcon(displayIcon, '💎')}
-        <div style={styles.itemInfo}><span style={styles.itemName}>{item.name}</span><span style={styles.itemSymbol}>{item.symbol}</span></div>
-        <div style={styles.itemAmount}>{formatTokenAmount(item.amount || '0')} {item.symbol}</div>
-        <span style={styles.expandIcon}>›</span>
-      </div>
-    );
-  }
-
-  // ─── LSP7 Single NFT list item ───────────────────────────
-
-  function Lsp7SingleNftListItem({ item }: { item: NftListEntry }) {
-    const resolved = useLsp7SingleNftImage({
-      contractAddress: item.contractAddress,
-      indexerIcon: item.collectionFallbackIcon,
-    });
-    const displayIcon = resolved?.url ? resolved : undefined;
-    return (
-      <div style={styles.item}
-        onClick={(e) => handleSelectAsset('nft', item.contractAddress, item.tokenId, e)}
-        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#edf2f7'; (e.currentTarget as HTMLElement).style.cursor = 'pointer'; }}
-        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = '#f7fafc'; }}>
-        {renderIcon(displayIcon, '🖼️')}
-        <div style={styles.itemInfo}><span style={styles.itemName}>{item.name}</span><span style={styles.itemSymbol}>{item.amount ? `${item.amount} ${item.symbol}` : item.symbol}</span></div>
-        <span style={styles.expandIcon}>›</span>
-      </div>
-    );
-  }
+  // ─── Token list item / LSP7 Single NFT list item ───────────
+  // モジュールレベルに定義済み（コンポーネント内定義を解消）。
+  // → TokenListItem / Lsp7SingleNftListItem を参照。
 
   // ─── Virtual row types ───────────────────────────────────
   // NFT list is flattened into a single array for virtualization.
@@ -898,7 +673,8 @@ export function AssetList({ address }: AssetListProps) {
   // for "300 NftChildItems all mounted at once" causing device heating.
 
   // ─── Flat virtual rows ───────────────────────────────────
-  // Rebuilt when filter, search, or expand state changes.
+  // displayLimitNfts: nft-child + lsp7-single の表示件数上限。
+  // section-header / collection-header / divider はカウント対象外。
 
   const virtualRows = useMemo((): VirtualRow[] => {
     const showLsp8 = nftFilter !== 'lsp7';
@@ -909,15 +685,20 @@ export function AssetList({ address }: AssetListProps) {
     if (!hasCollections && !hasSingles) return rows;
     const collTotal = (nftTree as NftCollEntry[]).reduce((s, c) => s + c.count, 0);
 
+    let leafCount = 0;  // nft-child + lsp7-single のカウント
+
     if (hasCollections) {
       rows.push({ kind: 'section-header', label: 'Collection NFT', protocol: 'LSP8', count: collTotal, sectionKey: 'lsp8' });
       if (expandedSections.has('lsp8')) {
         for (const item of nftTree) {
+          if (leafCount >= displayLimitNfts) break;
           const coll = item as NftCollEntry;
           rows.push({ kind: 'collection-header', coll });
           if (expandedCollections.has(coll.id.toLowerCase())) {
             for (const child of coll.children) {
+              if (leafCount >= displayLimitNfts) break;
               rows.push({ kind: 'nft-child', child });
+              leafCount++;
             }
           }
         }
@@ -927,71 +708,26 @@ export function AssetList({ address }: AssetListProps) {
     if (hasSingles) {
       rows.push({ kind: 'section-header', label: 'Single NFT', protocol: 'LSP7', count: lsp7Nfts.length, sectionKey: 'lsp7' });
       if (expandedSections.has('lsp7')) {
-        for (const item of lsp7Nfts) rows.push({ kind: 'lsp7-single', item });
+        for (const item of lsp7Nfts) {
+          if (leafCount >= displayLimitNfts) break;
+          rows.push({ kind: 'lsp7-single', item });
+          leafCount++;
+        }
       }
     }
     return rows;
-  }, [nftTree, lsp7Nfts, nftFilter, expandedSections, expandedCollections]);
+  }, [nftTree, lsp7Nfts, nftFilter, expandedSections, expandedCollections, displayLimitNfts]);
 
   // scrollOffset: save position before rows change, restore after
-  // ─── スクロール位置管理（フィルター別） ─────────────────
-  // フィルター（all/lsp8/lsp7）ごとにスクロール位置を記録する。
-  // 展開/折りたたみ時は現在のフィルターの位置を維持する。
-  // すべて1つの仕組みで管理し、競合を防ぐ。
-
-  const nftScrollByFilter = useRef<Record<string, number>>({ all: 0, lsp8: 0, lsp7: 0 });
-  // フィルター切り替え中フラグ：切り替え後の復元が展開復元と衝突しないようにする
-  const nftFilterSwitching = useRef(false);
-
-  // スクロールイベントで現在のフィルターの位置を常時記録
-  useEffect(() => {
-    const el = nftListRef.current;
-    if (!el) return;
-    const onScroll = () => {
-      if (!nftFilterSwitching.current) {
-        nftScrollByFilter.current[nftFilter] = el.scrollTop;
-      }
-    };
-    el.addEventListener('scroll', onScroll, { passive: true });
-    return () => el.removeEventListener('scroll', onScroll);
-  }, [nftFilter]);
+  // ─── NFT フィルター切り替え ───────────────────────────────
+  // 常時マウント環境では DOM が破棄されないため scrollTop は自然に保持される。
+  // 旧来の nftScrollByFilter / nftFilterSwitching / useLayoutEffect による
+  // 複雑なスクロール位置管理は不要になった。
 
   const handleNftFilterChange = useCallback((next: 'all' | 'lsp8' | 'lsp7') => {
     if (next === nftFilter) return;
-    // 現在位置を保存
-    if (nftListRef.current) {
-      nftScrollByFilter.current[nftFilter] = nftListRef.current.scrollTop;
-    }
-    nftFilterSwitching.current = true;
     setNftFilter(next);
   }, [nftFilter]);
-
-  // フィルター切り替え後に保存済み位置を復元
-  useEffect(() => {
-    if (!nftFilterSwitching.current) return;
-    const el = nftListRef.current;
-    if (el) el.scrollTop = nftScrollByFilter.current[nftFilter] ?? 0;
-    // 次のフレームでフラグを解除（scroll イベントが先に走らないよう）
-    requestAnimationFrame(() => { nftFilterSwitching.current = false; });
-  }, [nftFilter]);
-
-  // 展開/折りたたみ時は現在フィルターのスクロール位置を維持
-  // useLayoutEffect でブラウザの最初のペイント前に復元
-  const prevVirtualRowsLength = useRef(virtualRows.length);
-  useLayoutEffect(() => {
-    if (nftFilterSwitching.current) return;
-    const el = nftListRef.current;
-    if (!el) return;
-    if (prevVirtualRowsLength.current === virtualRows.length) return;
-    const savedScroll = el.scrollTop;
-    nftScrollByFilter.current[nftFilter] = savedScroll;
-    prevVirtualRowsLength.current = virtualRows.length;
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        el.scrollTop = nftScrollByFilter.current[nftFilter] ?? savedScroll;
-      });
-    });
-  }, [virtualRows.length, nftFilter]);
 
   // ─── renderVirtualRow callback ───────────────────────────
   // Passed to NftVirtualList which lives outside AssetList.
@@ -1008,7 +744,7 @@ export function AssetList({ address }: AssetListProps) {
           />
         );
       case 'divider':
-        return <div style={{ height: '17px', display: 'flex', alignItems: 'center' }}><div style={{ height: '1px', background: '#e2e8f0', width: '100%' }} /></div>;
+        return <div style={{ height: '17px', display: 'flex', alignItems: 'center' }}><div style={{ height: '1px', background: 'var(--color-border-default)', width: '100%' }} /></div>;
       case 'collection-header':
         return (
           <NftCollectionHeaderRow
@@ -1027,7 +763,7 @@ export function AssetList({ address }: AssetListProps) {
           />
         );
       case 'lsp7-single':
-        return <Lsp7SingleNftListItem item={row.item} />;
+        return <Lsp7SingleNftListItem item={row.item} onSelect={handleSelectAsset} />;
     }
   }, [expandedSections, toggleSection, toggleCollection, handleSelectAsset]);
 
@@ -1038,32 +774,48 @@ export function AssetList({ address }: AssetListProps) {
 
   const showPlaceholder = !targetAddress;
 
-  const renderTokenList = (items: TokenItem[], listRef: React.RefObject<HTMLDivElement | null>) => (
-    <div style={styles.list} ref={listRef}>
+  const renderTokenList = (items: TokenItem[]) => (
+    <div style={styles.list}>
       {items.length === 0 ? <p style={styles.empty}>No tokens found</p> : items.map((item) => {
         if (item.type === 'LYX') {
           return (
-            <div key={item.id} style={styles.item}
+            <div
+              key={item.id}
+              className="list-item"
+              style={styles.item}
               onClick={(e) => handleSelectAsset('token' as const, item.contractAddress, undefined, e)}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#edf2f7'; (e.currentTarget as HTMLElement).style.cursor = 'pointer'; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = '#f7fafc'; }}>
+            >
               {renderIcon(undefined, '💎')}
-              <div style={styles.itemInfo}><span style={styles.itemName}>{item.name}</span><span style={styles.itemSymbol}>{item.symbol}</span></div>
+              <div style={styles.itemInfo}>
+                <span style={styles.itemName}>{item.name}</span>
+                <span style={styles.itemSymbol}>{item.symbol}</span>
+              </div>
               <div style={styles.itemAmount}>{parseFloat(item.amount || '0').toFixed(4)} LYX</div>
               <span style={styles.expandIcon}>›</span>
             </div>
           );
         }
-        return <TokenListItem key={item.id} item={item} />;
+        return <TokenListItem key={item.id} item={item} onSelect={handleSelectAsset} />;
       })}
+      {/* Load more — displayLimitTokens を拡張するだけ（追加フェッチなし） */}
+      {displayedTokenItems.length < tokenItems.length && (
+        <div style={styles.showMoreRow}>
+          <button
+            style={styles.showMoreButton}
+            onClick={() => setDisplayLimitTokens(n => n + DISPLAY_PAGE)}
+          >
+            Load more
+          </button>
+        </div>
+      )}
     </div>
   );
 
   // ─── Popup ───────────────────────────────────────────────
-  // All three asset types now resolved via dedicated hooks.
+  // All three asset types resolved via dedicated hooks.
   // isLsp8Popup:    useLsp8ChildImage
-  // isTokenPopup:   useTokenImage
-  // isLsp7NftPopup: useLsp7SingleNftImage
+  // isTokenPopup:   useAssetImage({ type: 'token' })
+  // isLsp7NftPopup: useAssetImage({ type: 'lsp7nft' })
 
   const isLsp8Popup    = selectedAsset?.type === 'nft' && !!selectedAsset?.formattedTokenId;
   const isTokenPopup   = selectedAsset?.type === 'token';
@@ -1089,25 +841,27 @@ export function AssetList({ address }: AssetListProps) {
   );
 
   // Token popup image
-  const popupTokenImage = useTokenImage(
+  const popupTokenImage = useAssetImage(
     isTokenPopup && popupContractAddress
       ? {
+          type: 'token',
           contractAddress: popupContractAddress,
           indexerIcon: resolveDaIcon(selectedOwnedData) ?? undefined,
           isPopupContext: true,
         }
-      : { contractAddress: 'skip' }
+      : { type: 'token', contractAddress: 'skip' }
   );
 
   // LSP7 Single NFT popup image
-  const popupLsp7NftImage = useLsp7SingleNftImage(
+  const popupLsp7NftImage = useAssetImage(
     isLsp7NftPopup && popupContractAddress
       ? {
+          type: 'lsp7nft',
           contractAddress: popupContractAddress,
           indexerIcon: resolveDaIcon(selectedOwnedData) ?? undefined,
           isPopupContext: true,
         }
-      : { contractAddress: 'skip' }
+      : { type: 'lsp7nft', contractAddress: 'skip' }
   );
 
   // Unified popup image — picks the active hook result
@@ -1190,19 +944,20 @@ export function AssetList({ address }: AssetListProps) {
       <h3 style={styles.title}>💎 Assets</h3>
       {showPlaceholder && <p style={styles.empty}>🔌</p>}
       {targetAddress && (
-        <div style={{ animation: 'contentReveal 0.25s ease' }}>
+        // flex:1 でカード残余スペースを占有し、内部でリストが伸長する
+        <div className="content-reveal" style={styles.cardBody}>
           <div style={styles.tabs}>
-            <button style={{ ...styles.tab, ...(activeTab === 'tokens' ? styles.tabActive : {}) }} onClick={() => setActiveTab('tokens')}>🪙 <span style={styles.tabCount}>{tokenItems.length}</span> Tokens</button>
+            <button style={{ ...styles.tab, ...(activeTab === 'tokens' ? styles.tabActive : {}) }} onClick={() => setActiveTab('tokens')}>🪙 <span style={styles.tabCount}>{hasMoreAssets ? `${tokenItems.length}+` : tokenItems.length}</span> Tokens</button>
             <button style={{ ...styles.tab, ...(activeTab === 'nfts' ? styles.tabActive : {}) }} onClick={() => setActiveTab('nfts')}>🖼️ <span style={styles.tabCount}>{(nftTree as NftCollEntry[]).reduce((s, i) => s + i.count, 0) + lsp7Nfts.length}</span> NFTs</button>
           </div>
-          {/* Search bar — NFTs tab shows inline filter toggle on the right */}
-          <div style={{ display: 'flex', gap: '6px', marginBottom: '8px', alignItems: 'center' }}>
+          {/* 検索バー — NFTs タブ時は右端にフィルターボタンを表示 */}
+          <div style={{ display: 'flex', gap: 'var(--space-1)', marginBottom: 'var(--space-2)', alignItems: 'center', flexShrink: 0 }}>
             <input
               type="text"
               placeholder={activeTab === 'tokens' ? '🔍 Search tokens...' : '🔍 Search NFTs...'}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              style={{ ...styles.searchInput, marginBottom: 0, flex: 1 }}
+              style={{ ...styles.searchInput, flex: 1 }}
             />
             {activeTab === 'nfts' && (
               <div style={{ display: 'flex', gap: '3px', flexShrink: 0 }}>
@@ -1211,11 +966,16 @@ export function AssetList({ address }: AssetListProps) {
                     key={f}
                     onClick={() => handleNftFilterChange(f)}
                     style={{
-                      padding: '6px 8px', border: 'none', borderRadius: '7px', cursor: 'pointer',
-                      fontSize: '0.7rem', fontWeight: '600', lineHeight: 1,
-                      background: nftFilter === f ? 'linear-gradient(135deg,#667eea 0%,#764ba2 100%)' : '#f7fafc',
-                      color: nftFilter === f ? '#fff' : '#718096',
-                      transition: 'all 0.15s ease',
+                      padding: '6px 8px',
+                      border: 'none',
+                      borderRadius: 'var(--radius-sm)',
+                      cursor: 'pointer',
+                      fontSize: 'var(--text-sm)',
+                      fontWeight: '600',
+                      lineHeight: 1,
+                      background: nftFilter === f ? 'var(--gradient-brand)' : 'var(--color-surface-tab-inactive)',
+                      color: nftFilter === f ? 'var(--color-text-white)' : 'var(--color-text-muted)',
+                      transition: `all var(--transition-fast)`,
                     }}
                   >
                     {f === 'all' ? 'All' : f.toUpperCase()}
@@ -1224,17 +984,36 @@ export function AssetList({ address }: AssetListProps) {
               </div>
             )}
           </div>
-          <div style={{ position: 'relative' }}>
-            <div style={{ display: activeTab === 'tokens' ? 'block' : 'none' }}>{renderTokenList(tokenItems, tokenListRef)}</div>
-            <div style={{ display: activeTab === 'nfts' ? 'block' : 'none', minHeight: '60px' }}>
+          {/* リスト領域 — flex:1 で残余スペースを占有 */}
+          <div style={styles.listArea}>
+            <div style={{ display: activeTab === 'tokens' ? 'flex' : 'none', flexDirection: 'column', height: '100%' }}>
+              {renderTokenList(displayedTokenItems)}
+            </div>
+            <div style={{ display: activeTab === 'nfts' ? 'flex' : 'none', flexDirection: 'column', height: '100%', minHeight: '60px' }}>
               {!targetAddress ? (
                 <p style={styles.empty}>🔌</p>
               ) : virtualRows.length === 0 && ownedTokens.length === 0 ? (
-                <div style={{ minHeight: '200px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#a0aec0', fontSize: '0.85rem' }}>Loading...</div>
+                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--color-text-faint)', fontSize: 'var(--text-md)' }}>Loading...</div>
               ) : virtualRows.length === 0 ? (
                 <p style={styles.empty}>No NFTs found</p>
               ) : (
-                <NftVirtualList rows={virtualRows} listRef={nftListRef} renderRow={renderVirtualRow} />
+                <>
+                  <NftVirtualList rows={virtualRows} renderRow={renderVirtualRow} />
+                  {/* Load more — displayLimitNfts を拡張（追加フェッチなし） */}
+                  {(() => {
+                    const leafTotal = nftTree.reduce((s, c) => s + (c as NftCollEntry).count, 0) + lsp7Nfts.length;
+                    return displayLimitNfts < leafTotal ? (
+                      <div style={{ ...styles.showMoreRow, flexShrink: 0 }}>
+                        <button
+                          style={styles.showMoreButton}
+                          onClick={() => setDisplayLimitNfts(n => n + DISPLAY_PAGE)}
+                        >
+                          Load more
+                        </button>
+                      </div>
+                    ) : null;
+                  })()}
+                </>
               )}
             </div>
           </div>
@@ -1277,23 +1056,189 @@ const formatTokenAmount = (amount: string) => {
 // ─── Styles ──────────────────────────────────────────────────
 
 const styles: Record<string, React.CSSProperties> = {
-  card: { padding: '8px', background: 'rgba(255,255,255,0.95)', borderRadius: '16px', boxShadow: '0 4px 12px rgba(0,0,0,0.1)', minHeight: '600px' },
-  tabContent: { minHeight: '360px' },
-  title: { margin: '0 0 8px 0', fontSize: '1rem', fontWeight: '700', color: '#1a202c' },
-  tabs: { display: 'flex', gap: '8px', marginBottom: '8px' },
-  tab: { flex: 1, padding: '10px 12px', border: 'none', borderRadius: '10px', background: '#f7fafc', color: '#718096', fontSize: '0.85rem', fontWeight: '600', cursor: 'pointer', transition: 'all 0.25s ease', minHeight: '42px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' },
-  tabActive: { background: 'linear-gradient(135deg,#667eea 0%,#764ba2 100%)', color: '#fff' },
+  card: {
+    padding: 'var(--card-padding)',
+    background: 'var(--color-surface-card)',
+    borderRadius: 'var(--radius-2xl)',
+    boxShadow: 'var(--shadow-card)',
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    minHeight: 0,
+  },
+  // card 直下の可変領域 — flex:1 でカード残余スペースを占有
+  cardBody: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    minHeight: 0,
+  },
+  // リスト表示領域 — flex:1 で cardBody 残余を占有
+  listArea: {
+    flex: 1,
+    minHeight: 0,
+    position: 'relative',
+  },
+  title: {
+    margin: '0 0 var(--space-2) 0',
+    fontSize: 'var(--text-lg)',
+    fontWeight: '700',
+    color: 'var(--color-text-primary)',
+    flexShrink: 0,
+  },
+  tabs: {
+    display: 'flex',
+    gap: 'var(--space-2)',
+    marginBottom: 'var(--space-2)',
+    flexShrink: 0,
+  },
+  tab: {
+    flex: 1,
+    padding: '10px 12px',
+    border: 'none',
+    borderRadius: 'var(--radius-lg)',
+    background: 'var(--color-surface-tab-inactive)',
+    color: 'var(--color-text-muted)',
+    fontSize: 'var(--text-md)',
+    fontWeight: '600',
+    cursor: 'pointer',
+    transition: `all var(--transition-slow)`,
+    minHeight: 'var(--tab-height)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 'var(--space-1)',
+  },
+  tabActive: {
+    background: 'var(--gradient-brand)',
+    color: 'var(--color-text-white)',
+  },
   tabCount: { fontWeight: '800' },
-  searchInput: { width: '100%', padding: '8px 12px', marginBottom: '8px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '16px', outline: 'none', boxSizing: 'border-box' },
-  list: { display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '450px', overflowY: 'auto', minHeight: '60px' },
-  item: { display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 8px', background: '#f7fafc', borderRadius: '8px', transition: 'background 0.15s ease', position: 'relative', height: '44px', overflow: 'hidden', boxSizing: 'border-box', flexShrink: 0 },
-  itemIcon: { width: '28px', height: '28px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem', overflow: 'hidden', flexShrink: 0 },
-  itemIconWithImg: { width: '28px', height: '28px', borderRadius: '50%', background: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem', overflow: 'hidden', flexShrink: 0 },
+  searchInput: {
+    width: '100%',
+    padding: '8px 12px',
+    border: `1px solid var(--color-border-default)`,
+    borderRadius: 'var(--radius-md)',
+    fontSize: '16px',
+    outline: 'none',
+    boxSizing: 'border-box',
+    flexShrink: 0,
+  },
+  list: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 'var(--list-item-gap)',
+    overflowY: 'scroll',       // auto → scroll: バーを常時表示して消失を防ぐ
+    minHeight: 'var(--list-min-height)',
+  },
+  // item の background / transition は globals.css .list-item クラスで管理
+  item: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 'var(--space-2)',
+    padding: '0 var(--space-2)',   // 縦 padding は height で制御
+    borderRadius: 'var(--radius-md)',
+    position: 'relative',
+    height: 'var(--item-height)',
+    overflow: 'hidden',
+    boxSizing: 'border-box',
+    flexShrink: 0,
+  },
+  itemIcon: {
+    width: 'var(--avatar-size-sm)',
+    height: 'var(--avatar-size-sm)',
+    borderRadius: 'var(--radius-full)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: '1rem',
+    overflow: 'hidden',
+    flexShrink: 0,
+  },
+  itemIconWithImg: {
+    width: 'var(--avatar-size-sm)',
+    height: 'var(--avatar-size-sm)',
+    borderRadius: 'var(--radius-full)',
+    background: 'var(--color-surface-input)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: '1rem',
+    overflow: 'hidden',
+    flexShrink: 0,
+  },
   itemIconImg: { width: '100%', height: '100%', objectFit: 'cover' },
-  itemInfo: { flex: 1, display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 },
-  itemName: { fontSize: '0.85rem', fontWeight: '600', color: '#2d3748', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  itemSymbol: { fontSize: '0.75rem', color: '#718096', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '200px', flexShrink: 0 },
-  itemAmount: { fontSize: '0.75rem', fontWeight: '600', color: '#718096', textAlign: 'right', flexShrink: 0, maxWidth: '100px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  expandIcon: { fontSize: '1.2rem', color: '#cbd5e0', flexShrink: 0, marginLeft: '2px' },
-  empty: { margin: 0, padding: '16px', textAlign: 'center', color: '#a0aec0', fontSize: '0.85rem' },
+  itemInfo: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '2px',
+    minWidth: 0,
+  },
+  itemName: {
+    fontSize: 'var(--text-md)',
+    fontWeight: '600',
+    color: 'var(--color-text-secondary)',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  itemSymbol: {
+    fontSize: 'var(--text-base)',
+    color: 'var(--color-text-muted)',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    maxWidth: '200px',
+    flexShrink: 0,
+  },
+  itemAmount: {
+    fontSize: 'var(--text-base)',
+    fontWeight: '600',
+    color: 'var(--color-text-muted)',
+    textAlign: 'right',
+    flexShrink: 0,
+    maxWidth: '100px',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  expandIcon: {
+    fontSize: '1.2rem',
+    color: 'var(--color-border-muted)',
+    flexShrink: 0,
+    marginLeft: '2px',
+  },
+  empty: {
+    margin: 0,
+    padding: 'var(--space-4)',
+    textAlign: 'center',
+    color: 'var(--color-text-faint)',
+    fontSize: 'var(--text-md)',
+  },
+  // ── Show More ──
+  // リスト末尾に配置。flexShrink:0 で高さを確保し、
+  // リストエリアを圧迫しない。
+  showMoreRow: {
+    padding: 'var(--space-1) 0',
+    display: 'flex',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  showMoreButton: {
+    padding: '5px 16px',
+    border: `1px solid var(--color-border-default)`,
+    borderRadius: 'var(--radius-md)',
+    background: 'transparent',
+    color: 'var(--color-text-muted)',
+    fontSize: 'var(--text-sm)',
+    fontWeight: '600',
+    cursor: 'pointer',
+    transition: `all var(--transition-fast)`,
+  },
+  showMoreButtonLoading: {
+    opacity: 0.6,
+    cursor: 'not-allowed',
+  },
 };
