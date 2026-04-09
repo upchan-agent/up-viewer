@@ -1,52 +1,45 @@
-# UP Dashboard 🆙
+# UP Viewer 🆙
 
-LUKSO Universal Profile Dashboard - View your profile, social graph, and assets.
+LUKSO Universal Profile viewer — browse profiles, social connections, assets, and activity.
 
 ## Features
 
-- 🆙 Profile display with avatar
-- 🤝 Social graph (followers/following)
-- 💎 Assets (LYX, LSP7, LSP8)
-- 🖼️ Grid & Standalone mode support
+- 🆙 Profile display with avatar & search
+- 🤝 Social graph (followers / following)
+- 💎 Assets (LYX, LSP7, LSP8) with image caching
+- 📜 Activity list
+- 🔗 GraphQL proxy via internal API route (`/api/graphql`)
 
 ## Tech Stack
 
-- Next.js 15 (App Router)
-- @lukso/up-provider
-- @lsp-indexer/react (self-hosted)
-- ethers.js
+- Next.js 15 (App Router) + React 19 + Tailwind CSS v4
+- @lukso/up-provider, @lukso/up-modal
+- @lsp-indexer/react, @erc725/erc725.js
+- ethers.js, viem, wagmi
+- @tanstack/react-query, @tanstack/react-virtual, SWR
 
-## Setup
-
-1. Copy `.env.example` to `.env.local`:
-   ```bash
-   cp .env.example .env.local
-   ```
-
-2. Set your indexer URL:
-   ```
-   NEXT_PUBLIC_INDEXER_URL=https://your-indexer-url/v1/graphql
-   ```
-
-3. Install dependencies:
-   ```bash
-   npm install
-   ```
-
-4. Run development server:
-   ```bash
-   npm run dev
-   ```
-
-## Deployment
-
-Deploy to Vercel:
+## Getting Started
 
 ```bash
-vercel --prod
+cp .env.example .env.local   # edit INDEXER_URL to your Hasura endpoint
+npm install
+npm run dev                  # http://localhost:3000
 ```
 
-**Note:** Set `NEXT_PUBLIC_INDEXER_URL` in Vercel environment variables.
+### Environment Variables
+
+| Variable | Description |
+|---|---|
+| `INDEXER_URL` | Hasura GraphQL endpoint (server-side only) |
+| `NEXT_PUBLIC_INDEXER_URL` | Proxy URL exposed to the client (default: `/api/graphql`) |
+
+## Deploy
+
+```bash
+vercel
+```
+
+Set `INDEXER_URL` in Vercel environment variables.
 
 ---
 
