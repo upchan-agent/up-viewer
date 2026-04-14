@@ -67,12 +67,44 @@ function resolveDaIcon(item: any): ResolvedIcon | null {
   return null;
 }
 
+// ─── TimeoutImage (IPFS タイムアウト付き) ─────────────────
+
+const IPFS_IMG_TIMEOUT_MS = 10000;
+
+function TimeoutImage({ src, alt, style, className }: {
+  src: string; alt?: string; style?: React.CSSProperties; className?: string;
+}) {
+  const [failed, setFailed] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+    setLoaded(false);
+    const timer = setTimeout(() => {
+      if (!loaded) setFailed(true);
+    }, IPFS_IMG_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [src]);
+
+  if (failed) return null;
+  return (
+    <img
+      src={src}
+      alt={alt ?? ''}
+      style={style}
+      className={className}
+      onLoad={() => setLoaded(true)}
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
 // ─── renderIcon (standalone, no re-creation on each render) ──
 
 function renderIcon(icon: ResolvedIcon | undefined, fallbackEmoji: string) {
   return (
     <div style={icon ? styles.itemIconWithImg : styles.itemIcon}>
-      {icon ? <img src={icon.url} alt="" style={styles.itemIconImg} onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} /> : <span>{fallbackEmoji}</span>}
+      {icon ? <TimeoutImage src={icon.url} style={styles.itemIconImg} /> : <span>{fallbackEmoji}</span>}
     </div>
   );
 }

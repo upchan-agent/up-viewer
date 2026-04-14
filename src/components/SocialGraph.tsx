@@ -6,6 +6,37 @@ import { toGatewayUrl } from '@/lib/utils';
 import { useState, useMemo, useEffect, useRef, useCallback, memo } from 'react';
 import { Popup } from '@/components/Popup';
 import type { PopupLink } from '@/components/Popup';
+
+// ─── TimeoutImage ────────────────────────────────────────
+
+const SOCIAL_IMG_TIMEOUT_MS = 10000;
+
+function TimeoutImage({ src, alt, style, }: {
+  src: string; alt?: string; style?: React.CSSProperties;
+}) {
+  const [failed, setFailed] = useState(false);
+  const loadedRef = useRef(false);
+
+  useEffect(() => {
+    setFailed(false);
+    loadedRef.current = false;
+    const timer = setTimeout(() => {
+      if (!loadedRef.current) setFailed(true);
+    }, SOCIAL_IMG_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [src]);
+
+  if (failed) return null;
+  return (
+    <img
+      src={src}
+      alt={alt ?? ''}
+      style={style}
+      onLoad={() => { loadedRef.current = true; }}
+      onError={() => setFailed(true)}
+    />
+  );
+}
 import {
   subscribeProfileCache,
   fetchProfileCache,
@@ -43,8 +74,7 @@ const ProfileListItem = memo(function ProfileListItem({
   return (
     <div className="list-item" style={styles.item} onClick={() => onSelect(address)}>
       {imageUrl ? (
-        <img src={imageUrl} alt="" style={styles.itemAvatar}
-          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+        <TimeoutImage src={imageUrl} style={styles.itemAvatar} />
       ) : (
         <div style={styles.itemAvatarPlaceholder}>{name.charAt(0).toUpperCase()}</div>
       )}

@@ -7,6 +7,8 @@ import { toGatewayUrl } from '@/lib/utils';
 import { LUKSO_RPC_URL } from '@/lib/constants';
 import { useEffect, useState } from 'react';
 
+const ERC725_FETCH_TIMEOUT_MS = 15000; // ERC725 は RPC + IPFS の2段階なので長め
+
 interface Lsp3ProfileImages {
   profileImageUrl: string | null;
   backgroundImageUrl: string | null;
@@ -26,7 +28,10 @@ async function fetchLsp3ProfileImages(address: string): Promise<Lsp3ProfileImage
       { ipfsGateway: 'https://api.universalprofile.cloud/ipfs/' },
     );
 
-    const result = await erc725.fetchData('LSP3Profile');
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('ERC725 fetch timeout')), ERC725_FETCH_TIMEOUT_MS)
+    );
+    const result = await Promise.race([erc725.fetchData('LSP3Profile'), timeoutPromise]);
     const lsp3 = (result?.value as any)?.LSP3Profile;
 
     const profileImageUrl = lsp3?.profileImage?.[0]?.url

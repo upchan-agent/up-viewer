@@ -27,8 +27,9 @@ export interface ResolvedAssetImage {
 // ─── Envio GraphQL エンドポイント ─────────────────────────
 
 const INDEXER_URL = 'https://envio.lukso-mainnet.universal.tech/v1/graphql';
+const FETCH_TIMEOUT_MS = 10000; // 10秒でタイムアウト
 
-// ─── Rate limiter (最大3並列) ─────────────────────────────
+// ─── Rate limiter (最大6並列) ─────────────────────────────
 
 let _activeFetches = 0;
 const _fetchQueue: {
@@ -38,7 +39,7 @@ const _fetchQueue: {
 }[] = [];
 
 function _drainQueue() {
-  while (_activeFetches < 3 && _fetchQueue.length > 0) {
+  while (_activeFetches < 6 && _fetchQueue.length > 0) {
     _activeFetches++;
     const { fn, resolve, reject } = _fetchQueue.shift()!;
     fn()
@@ -69,11 +70,20 @@ async function fetchWithRetry(fn: () => Promise<string | null>): Promise<string 
   return null;
 }
 
+// ─── fetchWithTimeout ──────────────────────────────────────
+
+function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  return fetch(input, { ...init, signal: controller.signal })
+    .finally(() => clearTimeout(timeoutId));
+}
+
 // ─── API フェッチャー ──────────────────────────────────────
 
 export async function fetchAssetImage(addr: string): Promise<string | null> {
   const query = `{Asset(where:{id:{_eq:"${addr.toLowerCase()}"}},limit:1){icons{url}images{url}url}}`;
-  const res = await fetch(INDEXER_URL, {
+  const res = await fetchWithTimeout(INDEXER_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query }),
@@ -90,7 +100,7 @@ export async function fetchAssetImage(addr: string): Promise<string | null> {
 export async function fetchTokenImage(addr: string, tidHex: string): Promise<string | null> {
   const fullId = `${addr.toLowerCase()}-${tidHex}`;
   const query = `{Token(where:{id:{_eq:"${fullId}"}},limit:1){images{url}icons{url}}}`;
-  const res = await fetch(INDEXER_URL, {
+  const res = await fetchWithTimeout(INDEXER_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query }),
