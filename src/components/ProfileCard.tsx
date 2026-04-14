@@ -4,6 +4,41 @@ import { useUpProvider } from '@/lib/up-provider';
 import { useProfile } from '@lsp-indexer/react';
 import { toGatewayUrl } from '@/lib/utils';
 import { useResolvedProfileImage } from '@/lib/profile-image-cache';
+import { useState, useEffect, useRef } from 'react';
+
+// ─── TimeoutImage ────────────────────────────────────────
+
+const PC_IMG_TIMEOUT_MS = 10000;
+
+function TimeoutImage({ src, alt, style, className, onLoad, fallback, }: {
+  src: string; alt?: string; style?: React.CSSProperties; className?: string;
+  onLoad?: (e: React.SyntheticEvent<HTMLImageElement>) => void;
+  fallback?: React.ReactNode;
+}) {
+  const [failed, setFailed] = useState(false);
+  const loadedRef = useRef(false);
+
+  useEffect(() => {
+    setFailed(false);
+    loadedRef.current = false;
+    const timer = setTimeout(() => {
+      if (!loadedRef.current) setFailed(true);
+    }, PC_IMG_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [src]);
+
+  if (failed) return <>{fallback ?? null}</>;
+  return (
+    <img
+      src={src}
+      alt={alt ?? ''}
+      style={style}
+      className={className}
+      onLoad={(e) => { loadedRef.current = true; onLoad?.(e); }}
+      onError={() => setFailed(true)}
+    />
+  );
+}
 
 // ── document.createElement('style') は globals.css に集約済み ──
 // shimmer / pulse keyframes は globals.css で定義。
@@ -70,12 +105,10 @@ export function ProfileCard({
       {/* 背景画像 — absolute で位置取りし、カードサイズに影響しない */}
       {!isLoading && backgroundImageUrl && (
         <div style={styles.bgWrapper}>
-          <img
+          <TimeoutImage
             src={backgroundImageUrl}
-            alt=""
             style={styles.bgImg}
-            onLoad={(e)  => { (e.target as HTMLImageElement).style.opacity = '1'; }}
-            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+            onLoad={(e) => { (e.target as HTMLImageElement).style.opacity = '1'; }}
           />
         </div>
       )}
@@ -192,11 +225,11 @@ export function ProfileCard({
                 <span style={styles.loadingSpinner}>⏳</span>
               </div>
             ) : profileImageUrl ? (
-              <img
+              <TimeoutImage
                 src={profileImageUrl}
                 alt={name}
                 style={styles.avatar}
-                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                fallback={<div style={styles.avatarPlaceholder}>{initials}</div>}
               />
             ) : (
               <div style={styles.avatarPlaceholder}>{initials}</div>
