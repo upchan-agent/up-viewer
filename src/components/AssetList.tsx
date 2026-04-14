@@ -71,8 +71,9 @@ function resolveDaIcon(item: any): ResolvedIcon | null {
 
 const IPFS_IMG_TIMEOUT_MS = 10000;
 
-function TimeoutImage({ src, alt, style, className }: {
+function TimeoutImage({ src, alt, style, className, fallback }: {
   src: string; alt?: string; style?: React.CSSProperties; className?: string;
+  fallback?: React.ReactNode;
 }) {
   const [failed, setFailed] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -86,7 +87,7 @@ function TimeoutImage({ src, alt, style, className }: {
     return () => clearTimeout(timer);
   }, [src]);
 
-  if (failed) return null;
+  if (failed) return <>{fallback ?? null}</>;
   return (
     <img
       src={src}
@@ -104,7 +105,9 @@ function TimeoutImage({ src, alt, style, className }: {
 function renderIcon(icon: ResolvedIcon | undefined, fallbackEmoji: string) {
   return (
     <div style={icon ? styles.itemIconWithImg : styles.itemIcon}>
-      {icon ? <TimeoutImage src={icon.url} style={styles.itemIconImg} /> : <span>{fallbackEmoji}</span>}
+      {icon
+        ? <TimeoutImage src={icon.url} style={styles.itemIconImg} fallback={<span>{fallbackEmoji}</span>} />
+        : <span>{fallbackEmoji}</span>}
     </div>
   );
 }

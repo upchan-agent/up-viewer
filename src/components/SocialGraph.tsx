@@ -11,8 +11,9 @@ import type { PopupLink } from '@/components/Popup';
 
 const SOCIAL_IMG_TIMEOUT_MS = 10000;
 
-function TimeoutImage({ src, alt, style, }: {
+function TimeoutImage({ src, alt, style, fallback, }: {
   src: string; alt?: string; style?: React.CSSProperties;
+  fallback?: React.ReactNode;
 }) {
   const [failed, setFailed] = useState(false);
   const loadedRef = useRef(false);
@@ -26,7 +27,7 @@ function TimeoutImage({ src, alt, style, }: {
     return () => clearTimeout(timer);
   }, [src]);
 
-  if (failed) return null;
+  if (failed) return <>{fallback ?? null}</>;
   return (
     <img
       src={src}
@@ -71,12 +72,14 @@ const ProfileListItem = memo(function ProfileListItem({
   const resolved = useResolvedProfileImage({ address, indexerImageUrl });
   const imageUrl = resolved?.profileImageUrl || undefined;
 
+  const initialsFallback = <div style={styles.itemAvatarPlaceholder}>{name.charAt(0).toUpperCase()}</div>;
+
   return (
     <div className="list-item" style={styles.item} onClick={() => onSelect(address)}>
       {imageUrl ? (
-        <TimeoutImage src={imageUrl} style={styles.itemAvatar} />
+        <TimeoutImage src={imageUrl} style={styles.itemAvatar} fallback={initialsFallback} />
       ) : (
-        <div style={styles.itemAvatarPlaceholder}>{name.charAt(0).toUpperCase()}</div>
+        initialsFallback
       )}
       <div style={styles.itemInfo}>
         <span style={styles.itemName}>{name}{isMutual && ' 🤝'}</span>

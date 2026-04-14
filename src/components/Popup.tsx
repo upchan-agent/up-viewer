@@ -6,9 +6,10 @@ import { useState, useEffect, useCallback, useRef, memo } from 'react';
 
 const POPUP_IMG_TIMEOUT_MS = 12000;
 
-function TimeoutImage({ src, alt, style, className, onLoad, }: {
+function TimeoutImage({ src, alt, style, className, onLoad, fallback, }: {
   src: string; alt?: string; style?: React.CSSProperties; className?: string;
   onLoad?: (e: React.SyntheticEvent<HTMLImageElement>) => void;
+  fallback?: React.ReactNode;
 }) {
   const [failed, setFailed] = useState(false);
   const loadedRef = useRef(false);
@@ -22,7 +23,7 @@ function TimeoutImage({ src, alt, style, className, onLoad, }: {
     return () => clearTimeout(timer);
   }, [src]);
 
-  if (failed) return null;
+  if (failed) return <>{fallback ?? null}</>;
   return (
     <img
       src={src}
@@ -159,14 +160,17 @@ export const Popup = memo(function Popup({
 
   const isLoading = image?.scheme === 'loading';
 
+  // Banner avatar fallback (timeout時)
+  const avatarFallback = placeholderInitial
+    ? <span style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--color-text-white)' }}>{placeholderInitial}</span>
+    : <span style={{ fontSize: '1.4rem' }}>{placeholderEmoji}</span>;
+
   // Banner avatar content — what to show inside the circular avatar
   const avatarContent = isLoading
     ? <span style={{ fontSize: '1rem', color: 'var(--color-text-faint)' }}>⏳</span>
     : image?.url
-      ? <TimeoutImage src={image.url} style={styles.bannerAvatar} />
-      : placeholderInitial
-        ? <span style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--color-text-white)' }}>{placeholderInitial}</span>
-        : <span style={{ fontSize: '1.4rem' }}>{placeholderEmoji}</span>;
+      ? <TimeoutImage src={image.url} style={styles.bannerAvatar} fallback={avatarFallback} />
+      : avatarFallback;
 
   return (
     <div style={styles.overlay} onClick={onClose}>
@@ -213,7 +217,7 @@ export const Popup = memo(function Popup({
             {isLoading
               ? <span style={styles.loadingText}>⏳ Loading...</span>
               : image?.url
-                ? <TimeoutImage src={image.url} style={styles.image} />
+                ? <TimeoutImage src={image.url} style={styles.image} fallback={<span style={styles.placeholderEmoji}>{placeholderEmoji}</span>} />
                 : <span style={styles.placeholderEmoji}>{placeholderEmoji}</span>}
           </div>
         )}
