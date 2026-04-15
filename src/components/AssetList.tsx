@@ -51,11 +51,15 @@ const shortenId = (id: string, maxLen = 16): string => {
 };
 
 const toTokenIdHex = (tid: string): string => {
-  // Normalize: lowercase and pad to 64 hex chars (32 bytes)
-  const hex = tid.startsWith('0x') ? tid.slice(2) : tid;
-  const digits = hex.replace(/[^0-9a-fA-F]/g, '');
+  if (tid.startsWith('0x')) {
+    // Already hex — lowercase and pad to 64 chars
+    const hex = tid.slice(2).replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+    return '0x' + hex.padStart(64, '0');
+  }
+  // Decimal number — convert to hex and pad
+  const digits = tid.replace(/[^0-9]/g, '');
   if (!digits) return '0x' + '0'.repeat(64);
-  return '0x' + digits.toLowerCase().padStart(64, '0');
+  return '0x' + BigInt(digits).toString(16).padStart(64, '0');
 };
 
 function resolveDaIcon(item: any): ResolvedIcon | null {
