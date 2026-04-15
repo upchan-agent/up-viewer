@@ -274,14 +274,35 @@ export function SocialGraph({ address, active = true }: SocialGraphProps) {
     if (hasMoreFollowing && !loadingMoreFollowing) fetchMoreFollowingRef.current();
   }, [hasMoreFollowing, loadingMoreFollowing]);
 
+  // 重複を除去してからフィルタリング
+  const uniqueFollowers = useMemo(() => {
+    const seen = new Set<string>();
+    return (followers || []).filter(f => {
+      const addr = f.followerAddress.toLowerCase();
+      if (seen.has(addr)) return false;
+      seen.add(addr);
+      return true;
+    });
+  }, [followers]);
+
+  const uniqueFollowing = useMemo(() => {
+    const seen = new Set<string>();
+    return (following || []).filter(f => {
+      const addr = f.followedAddress.toLowerCase();
+      if (seen.has(addr)) return false;
+      seen.add(addr);
+      return true;
+    });
+  }, [following]);
+
   const followersSet = useMemo(() =>
-    new Set((followers || []).map(f => f.followerAddress.toLowerCase())),
-    [followers]
+    new Set((uniqueFollowers || []).map(f => f.followerAddress.toLowerCase())),
+    [uniqueFollowers]
   );
 
   const followingSet = useMemo(() =>
-    new Set((following || []).map(f => f.followedAddress.toLowerCase())),
-    [following]
+    new Set((uniqueFollowing || []).map(f => f.followedAddress.toLowerCase())),
+    [uniqueFollowing]
   );
 
   const mutualSet = useMemo(() => {
@@ -293,22 +314,22 @@ export function SocialGraph({ address, active = true }: SocialGraphProps) {
   }, [followersSet, followingSet]);
 
   const filteredFollowers = useMemo(() => {
-    if (!searchQuery) return followers || [];
+    if (!searchQuery) return uniqueFollowers;
     const query = searchQuery.toLowerCase();
-    return (followers || []).filter(f => {
+    return uniqueFollowers.filter(f => {
       const name = f.followerProfile?.name || 'Unknown';
       return name.toLowerCase().includes(query) || f.followerAddress.toLowerCase().includes(query);
     });
-  }, [followers, searchQuery]);
+  }, [uniqueFollowers, searchQuery]);
 
   const filteredFollowing = useMemo(() => {
-    if (!searchQuery) return following || [];
+    if (!searchQuery) return uniqueFollowing;
     const query = searchQuery.toLowerCase();
-    return (following || []).filter(f => {
+    return uniqueFollowing.filter(f => {
       const name = f.followedProfile?.name || 'Unknown';
       return name.toLowerCase().includes(query) || f.followedAddress.toLowerCase().includes(query);
     });
-  }, [following, searchQuery]);
+  }, [uniqueFollowing, searchQuery]);
 
   const handleSelectProfile = useCallback((addr: string) => {
     _setSocialPopupOpen(true);
