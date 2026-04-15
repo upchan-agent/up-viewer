@@ -8,6 +8,7 @@ import { useEffect, useState, useMemo, useCallback, useRef, memo } from 'react';
 import { ethers } from 'ethers';
 import { Popup } from '@/components/Popup';
 import type { PopupLink } from '@/components/Popup';
+import { ErrorImage } from '@/components/ErrorImage';
 import {
   useAssetImage,
   apiFetch,
@@ -70,26 +71,6 @@ function resolveDaIcon(item: any): ResolvedIcon | null {
   // digitalAsset.url (LSP4TokenURI) intentionally excluded:
   // it points to a metadata JSON, not an image, and is not a reliable image source.
   return null;
-}
-
-// ─── ErrorImage（エラー時のみフォールバック表示）──────────
-
-function ErrorImage({ src, alt, style, className, fallback }: {
-  src: string; alt?: string; style?: React.CSSProperties; className?: string;
-  fallback?: React.ReactNode;
-}) {
-  const [failed, setFailed] = useState(false);
-
-  if (failed) return <>{fallback ?? null}</>;
-  return (
-    <img
-      src={src}
-      alt={alt ?? ''}
-      style={style}
-      className={className}
-      onError={() => setFailed(true)}
-    />
-  );
 }
 
 // ─── renderIcon (standalone, no re-creation on each render) ──

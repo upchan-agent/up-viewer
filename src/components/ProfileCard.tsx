@@ -5,28 +5,7 @@ import { useProfile } from '@lsp-indexer/react';
 import { toGatewayUrl } from '@/lib/utils';
 import { useResolvedProfileImage } from '@/lib/profile-image-cache';
 import { useState, useEffect, useRef } from 'react';
-
-// ─── ErrorImage（エラー時のみフォールバック表示）──────────
-
-function ErrorImage({ src, alt, style, className, onLoad, fallback }: {
-  src: string; alt?: string; style?: React.CSSProperties; className?: string;
-  onLoad?: (e: React.SyntheticEvent<HTMLImageElement>) => void;
-  fallback?: React.ReactNode;
-}) {
-  const [failed, setFailed] = useState(false);
-
-  if (failed) return <>{fallback ?? null}</>;
-  return (
-    <img
-      src={src}
-      alt={alt ?? ''}
-      style={style}
-      className={className}
-      onLoad={(e) => { onLoad?.(e); }}
-      onError={() => setFailed(true)}
-    />
-  );
-}
+import { ErrorImage } from '@/components/ErrorImage';
 
 // ── document.createElement('style') は globals.css に集約済み ──
 // shimmer / pulse keyframes は globals.css で定義。

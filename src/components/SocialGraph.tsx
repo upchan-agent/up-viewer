@@ -6,25 +6,7 @@ import { toGatewayUrl } from '@/lib/utils';
 import { useState, useMemo, useEffect, useRef, useCallback, memo } from 'react';
 import { Popup } from '@/components/Popup';
 import type { PopupLink } from '@/components/Popup';
-
-// ─── ErrorImage（エラー時のみフォールバック表示）──────────
-
-function ErrorImage({ src, alt, style, fallback }: {
-  src: string; alt?: string; style?: React.CSSProperties;
-  fallback?: React.ReactNode;
-}) {
-  const [failed, setFailed] = useState(false);
-
-  if (failed) return <>{fallback ?? null}</>;
-  return (
-    <img
-      src={src}
-      alt={alt ?? ''}
-      style={style}
-      onError={() => setFailed(true)}
-    />
-  );
-}
+import { ErrorImage } from '@/components/ErrorImage';
 import {
   subscribeProfileCache,
   fetchProfileCache,
