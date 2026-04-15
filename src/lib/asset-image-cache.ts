@@ -88,7 +88,7 @@ export async function fetchAssetImage(addr: string): Promise<string | null> {
 }
 
 export async function fetchTokenImage(addr: string, tidHex: string): Promise<string | null> {
-  const fullId = `${addr.toLowerCase()}-${tidHex}`;
+  const fullId = `${addr.toLowerCase()}-${tidHex.toLowerCase()}`;
   const query = `{Token(where:{id:{_eq:"${fullId}"}},limit:1){images{url}icons{url}}}`;
   const res = await fetch(INDEXER_URL, {
     method: 'POST',
