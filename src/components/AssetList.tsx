@@ -67,25 +67,13 @@ function resolveDaIcon(item: any): ResolvedIcon | null {
   return null;
 }
 
-// ─── TimeoutImage (IPFS タイムアウト付き) ─────────────────
+// ─── ErrorImage（エラー時のみフォールバック表示）──────────
 
-const IPFS_IMG_TIMEOUT_MS = 10000;
-
-function TimeoutImage({ src, alt, style, className, fallback }: {
+function ErrorImage({ src, alt, style, className, fallback }: {
   src: string; alt?: string; style?: React.CSSProperties; className?: string;
   fallback?: React.ReactNode;
 }) {
   const [failed, setFailed] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-
-  useEffect(() => {
-    setFailed(false);
-    setLoaded(false);
-    const timer = setTimeout(() => {
-      if (!loaded) setFailed(true);
-    }, IPFS_IMG_TIMEOUT_MS);
-    return () => clearTimeout(timer);
-  }, [src]);
 
   if (failed) return <>{fallback ?? null}</>;
   return (
@@ -94,7 +82,6 @@ function TimeoutImage({ src, alt, style, className, fallback }: {
       alt={alt ?? ''}
       style={style}
       className={className}
-      onLoad={() => setLoaded(true)}
       onError={() => setFailed(true)}
     />
   );
@@ -106,7 +93,7 @@ function renderIcon(icon: ResolvedIcon | undefined, fallbackEmoji: string) {
   return (
     <div style={icon ? styles.itemIconWithImg : styles.itemIcon}>
       {icon
-        ? <TimeoutImage src={icon.url} style={styles.itemIconImg} fallback={<span>{fallbackEmoji}</span>} />
+        ? <ErrorImage src={icon.url} style={styles.itemIconImg} fallback={<span>{fallbackEmoji}</span>} />
         : <span>{fallbackEmoji}</span>}
     </div>
   );
@@ -155,12 +142,6 @@ const isColl = (x: NftRenderItem): x is NftCollEntry => 'isCollection' in x && x
 //   { url: '', ... }    → confirmed no image (caller shows emoji)
 //   { url: '...', ... } → resolved (caller shows image)
 //
-// useNft timeout: if isLoading stays true beyond NFT_HOOK_TIMEOUT_MS,
-// the hook stops waiting and proceeds to the API + fallback chain.
-// timedOut is stored in a ref (not state) so it never resets when
-// nftLoadingRaw later becomes false — eliminating the "stuck on loading" bug.
-
-const NFT_HOOK_TIMEOUT_MS = 5000;
 
 // ResolvedAssetImage は @/lib/asset-image-cache から import 済み
 // (旧 ResolvedAssetImage と同一定義)
@@ -193,15 +174,6 @@ function useLsp8ChildImage({
   });
 
   // Timeout via ref — no state update (prevents mass re-render of all children)
-  const hasTimedOut = useRef(false);
-  useEffect(() => {
-    if (!nftLoadingRaw) { hasTimedOut.current = false; return; }
-    const t = setTimeout(() => { hasTimedOut.current = true; }, NFT_HOOK_TIMEOUT_MS);
-    return () => clearTimeout(t);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageCacheKey]);
-
-  const nftHookIsLoading = nftLoadingRaw && !hasTimedOut.current;
 
   // Per-key subscription — only re-renders when this component's own fetch completes
   const [, setTick] = useState(0);
@@ -209,19 +181,19 @@ function useLsp8ChildImage({
 
   // Kick off API fetch once useNft settles
   useEffect(() => {
-    if (nftHookIsLoading) return;
+    if (nftLoadingRaw) return;
     const nftMetadata = nftData as any;
     const nftImages = nftMetadata ? flattenImages(nftMetadata) : [];
     if (nftImages.some(isUsableIpfs)) return;
     apiFetch(imageCacheKey, () => fetchTokenImage(contractAddressLower, tokenIdHex), isPopupContext);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nftHookIsLoading, imageCacheKey]);
+  }, [nftLoadingRaw, imageCacheKey]);
 
   // ── Priority chain — all levels evaluated before returning ─
   // Each level is always checked and logged, so debug[] always shows
   // the complete picture regardless of which level resolved the image.
 
-  if (nftHookIsLoading) return undefined; // waiting for useNft hook
+  if (nftLoadingRaw) return undefined; // waiting for useNft hook
 
   const nftMetadata = nftData as any;
   const debug: string[] = [];

@@ -7,25 +7,13 @@ import { useState, useMemo, useEffect, useRef, useCallback, memo } from 'react';
 import { Popup } from '@/components/Popup';
 import type { PopupLink } from '@/components/Popup';
 
-// ─── TimeoutImage ────────────────────────────────────────
+// ─── ErrorImage（エラー時のみフォールバック表示）──────────
 
-const SOCIAL_IMG_TIMEOUT_MS = 10000;
-
-function TimeoutImage({ src, alt, style, fallback, }: {
+function ErrorImage({ src, alt, style, fallback }: {
   src: string; alt?: string; style?: React.CSSProperties;
   fallback?: React.ReactNode;
 }) {
   const [failed, setFailed] = useState(false);
-  const loadedRef = useRef(false);
-
-  useEffect(() => {
-    setFailed(false);
-    loadedRef.current = false;
-    const timer = setTimeout(() => {
-      if (!loadedRef.current) setFailed(true);
-    }, SOCIAL_IMG_TIMEOUT_MS);
-    return () => clearTimeout(timer);
-  }, [src]);
 
   if (failed) return <>{fallback ?? null}</>;
   return (
@@ -33,7 +21,6 @@ function TimeoutImage({ src, alt, style, fallback, }: {
       src={src}
       alt={alt ?? ''}
       style={style}
-      onLoad={() => { loadedRef.current = true; }}
       onError={() => setFailed(true)}
     />
   );
@@ -77,7 +64,7 @@ const ProfileListItem = memo(function ProfileListItem({
   return (
     <div className="list-item" style={styles.item} onClick={() => onSelect(address)}>
       {imageUrl ? (
-        <TimeoutImage src={imageUrl} style={styles.itemAvatar} fallback={initialsFallback} />
+        <ErrorImage src={imageUrl} style={styles.itemAvatar} fallback={initialsFallback} />
       ) : (
         initialsFallback
       )}

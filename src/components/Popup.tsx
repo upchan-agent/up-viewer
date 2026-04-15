@@ -2,26 +2,14 @@
 
 import { useState, useEffect, useCallback, useRef, memo } from 'react';
 
-// ─── TimeoutImage ────────────────────────────────────────
+// ─── ErrorImage（エラー時のみフォールバック表示）──────────
 
-const POPUP_IMG_TIMEOUT_MS = 12000;
-
-function TimeoutImage({ src, alt, style, className, onLoad, fallback, }: {
+function ErrorImage({ src, alt, style, className, onLoad, fallback }: {
   src: string; alt?: string; style?: React.CSSProperties; className?: string;
   onLoad?: (e: React.SyntheticEvent<HTMLImageElement>) => void;
   fallback?: React.ReactNode;
 }) {
   const [failed, setFailed] = useState(false);
-  const loadedRef = useRef(false);
-
-  useEffect(() => {
-    setFailed(false);
-    loadedRef.current = false;
-    const timer = setTimeout(() => {
-      if (!loadedRef.current) setFailed(true);
-    }, POPUP_IMG_TIMEOUT_MS);
-    return () => clearTimeout(timer);
-  }, [src]);
 
   if (failed) return <>{fallback ?? null}</>;
   return (
@@ -30,7 +18,7 @@ function TimeoutImage({ src, alt, style, className, onLoad, fallback, }: {
       alt={alt ?? ''}
       style={style}
       className={className}
-      onLoad={(e) => { loadedRef.current = true; onLoad?.(e); }}
+      onLoad={(e) => { onLoad?.(e); }}
       onError={() => setFailed(true)}
     />
   );
@@ -169,7 +157,7 @@ export const Popup = memo(function Popup({
   const avatarContent = isLoading
     ? <span style={{ fontSize: '1rem', color: 'var(--color-text-faint)' }}>⏳</span>
     : image?.url
-      ? <TimeoutImage src={image.url} style={styles.bannerAvatar} fallback={avatarFallback} />
+      ? <ErrorImage src={image.url} style={styles.bannerAvatar} fallback={avatarFallback} />
       : avatarFallback;
 
   return (
@@ -196,7 +184,7 @@ export const Popup = memo(function Popup({
               background: backgroundImage ? 'transparent' : 'var(--color-border-default)',
             }}>
               {backgroundImage && (
-                <TimeoutImage
+                <ErrorImage
                   src={backgroundImage}
                   style={styles.bannerBgImg}
                   onLoad={(e) => { (e.target as HTMLImageElement).style.opacity = '1'; }}
@@ -217,7 +205,7 @@ export const Popup = memo(function Popup({
             {isLoading
               ? <span style={styles.loadingText}>⏳ Loading...</span>
               : image?.url
-                ? <TimeoutImage src={image.url} style={styles.image} fallback={<span style={styles.placeholderEmoji}>{placeholderEmoji}</span>} />
+                ? <ErrorImage src={image.url} style={styles.image} fallback={<span style={styles.placeholderEmoji}>{placeholderEmoji}</span>} />
                 : <span style={styles.placeholderEmoji}>{placeholderEmoji}</span>}
           </div>
         )}

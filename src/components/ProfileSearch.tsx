@@ -4,25 +4,13 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 
 const ENVIO_MAINNET_URL = 'https://envio.lukso-mainnet.universal.tech/v1/graphql';
 
-// ─── TimeoutImage ────────────────────────────────────────
+// ─── ErrorImage（エラー時のみフォールバック表示）──────────
 
-const PS_IMG_TIMEOUT_MS = 8000;
-
-function TimeoutImage({ src, alt, style, fallback, }: {
+function ErrorImage({ src, alt, style, fallback }: {
   src: string; alt?: string; style?: React.CSSProperties;
   fallback?: React.ReactNode;
 }) {
   const [failed, setFailed] = useState(false);
-  const loadedRef = useRef(false);
-
-  useEffect(() => {
-    setFailed(false);
-    loadedRef.current = false;
-    const timer = setTimeout(() => {
-      if (!loadedRef.current) setFailed(true);
-    }, PS_IMG_TIMEOUT_MS);
-    return () => clearTimeout(timer);
-  }, [src]);
 
   if (failed) return <>{fallback ?? null}</>;
   return (
@@ -30,7 +18,6 @@ function TimeoutImage({ src, alt, style, fallback, }: {
       src={src}
       alt={alt ?? ''}
       style={style}
-      onLoad={() => { loadedRef.current = true; }}
       onError={() => setFailed(true)}
     />
   );
@@ -196,7 +183,7 @@ export function ProfileSearch({ onSelect, onCancel }: ProfileSearchProps) {
             <button key={r.id} style={styles.resultItem} onClick={() => handleSelect(r)}>
               <div style={styles.resultAvatar}>
                 {r.profileImages?.[0]?.src ? (
-                  <TimeoutImage
+                  <ErrorImage
                     src={r.profileImages[0].src}
                     style={styles.resultAvatarImg}
                     fallback={<span style={styles.resultAvatarFallback}>👤</span>}
