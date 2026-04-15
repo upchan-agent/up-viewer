@@ -546,9 +546,15 @@ export function AssetList({ address, active = true }: AssetListProps) {
     pageSize: 500,
   });
 
-  // バックグラウンドで全件フェッチ（表示には影響しない）
-  useEffect(() => { if (hasMoreAssets && !loadingMoreAssets) fetchMoreAssets(); }, [hasMoreAssets, loadingMoreAssets, fetchMoreAssets]);
-  useEffect(() => { if (hasMoreTokens && !loadingMoreTokens) fetchMoreTokens(); }, [hasMoreTokens, loadingMoreTokens, fetchMoreTokens]);
+  // バックグラウンドで全件フェッチ（ref で安定化）
+  const fetchMoreAssetsRef = useRef(fetchMoreAssets);
+  fetchMoreAssetsRef.current = fetchMoreAssets;
+  
+  const fetchMoreTokensRef = useRef(fetchMoreTokens);
+  fetchMoreTokensRef.current = fetchMoreTokens;
+
+  useEffect(() => { if (hasMoreAssets && !loadingMoreAssets) fetchMoreAssetsRef.current(); }, [hasMoreAssets, loadingMoreAssets]);
+  useEffect(() => { if (hasMoreTokens && !loadingMoreTokens) fetchMoreTokensRef.current(); }, [hasMoreTokens, loadingMoreTokens]);
 
   useEffect(() => {
     if (!targetAddress) return;

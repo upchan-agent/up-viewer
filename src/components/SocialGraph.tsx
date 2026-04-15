@@ -277,14 +277,20 @@ export function SocialGraph({ address, active = true }: SocialGraphProps) {
     pageSize: 500,
   });
 
-  // バックグラウンドで全件フェッチ
-  useEffect(() => {
-    if (hasMoreFollowers && !loadingMoreFollowers) fetchMoreFollowers();
-  }, [hasMoreFollowers, loadingMoreFollowers, fetchMoreFollowers]);
+  // バックグラウンドで全件フェッチ（ref で安定化）
+  const fetchMoreFollowersRef = useRef(fetchMoreFollowers);
+  fetchMoreFollowersRef.current = fetchMoreFollowers;
+  
+  const fetchMoreFollowingRef = useRef(fetchMoreFollowing);
+  fetchMoreFollowingRef.current = fetchMoreFollowing;
 
   useEffect(() => {
-    if (hasMoreFollowing && !loadingMoreFollowing) fetchMoreFollowing();
-  }, [hasMoreFollowing, loadingMoreFollowing, fetchMoreFollowing]);
+    if (hasMoreFollowers && !loadingMoreFollowers) fetchMoreFollowersRef.current();
+  }, [hasMoreFollowers, loadingMoreFollowers]);
+
+  useEffect(() => {
+    if (hasMoreFollowing && !loadingMoreFollowing) fetchMoreFollowingRef.current();
+  }, [hasMoreFollowing, loadingMoreFollowing]);
 
   const followersSet = useMemo(() =>
     new Set((followers || []).map(f => f.followerAddress.toLowerCase())),
