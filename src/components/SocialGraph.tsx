@@ -1,7 +1,8 @@
 'use client';
 
 import { useUpProvider } from '@/lib/up-provider';
-import { useInfiniteFollows, useFollowCount, useProfile } from '@lsp-indexer/react';
+import { useInfiniteFollows, useProfile } from '@lsp-indexer/react';
+import { useLsp26Counts } from '@/lib/useLsp26Counts';
 import { toGatewayUrl } from '@/lib/utils';
 import { useState, useMemo, useEffect, useRef, useCallback, memo } from 'react';
 import { Popup } from '@/components/Popup';
@@ -131,9 +132,11 @@ function ProfilePopupContent({
     include: {
       name: true, description: true, tags: true, links: true,
       profileImage: true, backgroundImage: true, avatar: true,
-      followerCount: true, followingCount: true,
     },
   });
+
+  // LSP26 コントラクトで正確なフォロー数を取得（useProfile の値は不正確）
+  const lsp26 = useLsp26Counts(address.toLowerCase());
 
   // erc725 fallback state — mirrors useProfileImage pattern
   const [, setTick] = useState(0);
@@ -183,8 +186,8 @@ function ProfilePopupContent({
   ].join('\n');
 
   const stats = [
-    { label: 'Following', value: String(profile?.followingCount ?? '-') },
-    { label: 'Followers', value: String(profile?.followerCount ?? '-') },
+    { label: 'Following', value: String(lsp26.followingCount || '-') },
+    { label: 'Followers', value: String(lsp26.followerCount || '-') },
   ];
 
   const links: PopupLink[] = (profile?.links ?? []).map((l: any) => ({ title: l.title, url: l.url }));
@@ -232,10 +235,8 @@ export function SocialGraph({ address, active = true }: SocialGraphProps) {
     setDisplayLimitFollowers(DISPLAY_PAGE);
   }, [targetAddress]);
 
-  // useFollowCount で総数を取得（表示件数とは独立）
-  const { followerCount, followingCount } = useFollowCount({
-    address: fetchAddress,
-  });
+  // LSP26 コントラクト直接呼び出しで正確なフォロー数を取得
+  const { followerCount, followingCount } = useLsp26Counts(fetchAddress || undefined);
 
   const {
     follows: followers,
