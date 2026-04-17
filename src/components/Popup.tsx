@@ -85,6 +85,10 @@ export interface PopupProps {
   // External URL (Contract, Profile page, etc.)
   externalUrl?: PopupExternalUrl;
 
+  // Inline action button (shown next to externalUrl)
+  onView?: () => void;
+  viewLabel?: string;
+
   // Debug
   debugText?: string;
 }
@@ -106,6 +110,8 @@ export const Popup = memo(function Popup({
   links,
   attributes,
   externalUrl,
+  onView,
+  viewLabel = '👀 View',
   debugText,
 }: PopupProps) {
   const [debugOpen, setDebugOpen] = useState(false);
@@ -193,6 +199,14 @@ export const Popup = memo(function Popup({
         <div style={{ ...styles.header, ...(useBannerLayout ? { marginTop: '36px' } : {}) }}>
           {name && <h3 style={styles.name}>{name}</h3>}
           {subLabel && <span style={styles.subLabel}>{subLabel}</span>}
+          {onView && (
+            <button
+              style={styles.viewButton}
+              onClick={(e) => { e.stopPropagation(); onView(); }}
+            >
+              {viewLabel}
+            </button>
+          )}
         </div>
 
         {/* ── Tags ────────────────────────────────────────── */}
@@ -402,6 +416,20 @@ const styles: Record<string, React.CSSProperties> = {
 
   // リンク
   link: { color: 'var(--color-text-link)', textDecoration: 'none', wordBreak: 'break-all' },
+
+  // View ボタン
+  viewButton: {
+    marginTop: 'var(--space-1)',
+    padding: '4px 12px',
+    border: 'none',
+    borderRadius: 'var(--radius-md)',
+    background: 'var(--gradient-brand)',
+    color: 'var(--color-text-white)',
+    fontSize: 'var(--text-sm)',
+    fontWeight: '600',
+    cursor: 'pointer',
+    transition: 'opacity var(--transition-fast)',
+  },
   linksRow: { display: 'flex', flexWrap: 'wrap', gap: 'var(--space-1)', marginTop: 'var(--space-1)' },
   outboundLink: {
     fontSize: '0.8rem', padding: '4px 8px',

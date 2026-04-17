@@ -20,6 +20,7 @@ import {
 interface SocialGraphProps {
   address?: `0x${string}`;
   active?: boolean;
+  onViewMode?: (address: string) => void;
 }
 
 // ─── ProfileListItem ───────────────────────────────────────
@@ -123,9 +124,11 @@ const ProfileVirtualList = memo(function ProfileVirtualList({
 function ProfilePopupContent({
   address,
   onClose,
+  onView,
 }: {
   address: string;
   onClose: () => void;
+  onView?: (address: string) => void;
 }) {
   const { profile, isLoading } = useProfile({
     address: address.toLowerCase(),
@@ -207,6 +210,7 @@ function ProfilePopupContent({
       stats={stats}
       links={links}
       externalUrl={{ label: 'Profile', url: `https://universaleverything.io/${address}` }}
+      onView={onView ? () => { onView(address); onClose(); } : undefined}
       debugText={debugText}
     />
   );
@@ -214,7 +218,7 @@ function ProfilePopupContent({
 
 // ─── SocialGraph ───────────────────────────────────────────
 
-export function SocialGraph({ address, active = true }: SocialGraphProps) {
+export function SocialGraph({ address, active = true, onViewMode }: SocialGraphProps) {
   const { displayAddress } = useUpProvider();
   const targetAddress = address || displayAddress;
   const [activeTab, setActiveTab] = useState<'following' | 'followers'>('following');
@@ -428,6 +432,7 @@ export function SocialGraph({ address, active = true }: SocialGraphProps) {
         <ProfilePopupContent
           address={selectedAddress}
           onClose={handleClosePopup}
+          onView={onViewMode}
         />
       )}
     </div>

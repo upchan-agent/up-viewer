@@ -109,7 +109,7 @@ function ViewerInner() {
               }}
             >
               {tab === 'assets'   && <AssetList    address={activeAddress} active={activeTab === 'assets'}   />}
-              {tab === 'social'   && <SocialGraph  address={activeAddress} active={activeTab === 'social'}   />}
+              {tab === 'social'   && <SocialGraph  address={activeAddress} active={activeTab === 'social'} onViewMode={(addr) => handleSelectAddress(addr as `0x${string}`)} />}
               {tab === 'activity' && <ActivityList address={activeAddress} active={activeTab === 'activity'} />}
             </div>
           ))}
