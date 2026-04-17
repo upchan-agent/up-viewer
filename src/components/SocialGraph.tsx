@@ -1,8 +1,9 @@
 'use client';
 
 import { useUpProvider } from '@/lib/up-provider';
-import { useInfiniteFollows, useProfile } from '@lsp-indexer/react';
+import { useProfile } from '@lsp-indexer/react';
 import { useLsp26Counts } from '@/lib/useLsp26Counts';
+import { useLsp26Follows } from '@/lib/useLsp26Follows';
 import { toGatewayUrl } from '@/lib/utils';
 import { useState, useMemo, useEffect, useRef, useCallback, memo } from 'react';
 import { Popup } from '@/components/Popup';
@@ -242,72 +243,23 @@ export function SocialGraph({ address, active = true, onViewMode }: SocialGraphP
   // LSP26 コントラクト直接呼び出しで正確なフォロー数を取得
   const { followerCount, followingCount } = useLsp26Counts(fetchAddress || undefined);
 
+  // LSP26 からアドレス一覧 + lsp-indexer からプロフィールを取得
   const {
-    follows: followers,
-    hasNextPage: hasMoreFollowers,
-    fetchNextPage: fetchMoreFollowers,
-    isFetchingNextPage: loadingMoreFollowers,
-  } = useInfiniteFollows({
-    filter: { followedAddress: fetchAddress },
-    include: { followerProfile: { name: true, profileImage: true } },
-    pageSize: 500,
-  });
-
-  const {
-    follows: following,
-    hasNextPage: hasMoreFollowing,
-    fetchNextPage: fetchMoreFollowing,
-    isFetchingNextPage: loadingMoreFollowing,
-  } = useInfiniteFollows({
-    filter: { followerAddress: fetchAddress },
-    include: { followedProfile: { name: true, profileImage: true } },
-    pageSize: 500,
-  });
-
-  // バックグラウンドで全件フェッチ（ref で安定化）
-  const fetchMoreFollowersRef = useRef(fetchMoreFollowers);
-  fetchMoreFollowersRef.current = fetchMoreFollowers;
-  
-  const fetchMoreFollowingRef = useRef(fetchMoreFollowing);
-  fetchMoreFollowingRef.current = fetchMoreFollowing;
-
-  useEffect(() => {
-    if (hasMoreFollowers && !loadingMoreFollowers) fetchMoreFollowersRef.current();
-  }, [hasMoreFollowers, loadingMoreFollowers]);
-
-  useEffect(() => {
-    if (hasMoreFollowing && !loadingMoreFollowing) fetchMoreFollowingRef.current();
-  }, [hasMoreFollowing, loadingMoreFollowing]);
-
-  // 重複を除去してからフィルタリング
-  const uniqueFollowers = useMemo(() => {
-    const seen = new Set<string>();
-    return (followers || []).filter(f => {
-      const addr = f.followerAddress.toLowerCase();
-      if (seen.has(addr)) return false;
-      seen.add(addr);
-      return true;
-    });
-  }, [followers]);
-
-  const uniqueFollowing = useMemo(() => {
-    const seen = new Set<string>();
-    return (following || []).filter(f => {
-      const addr = f.followedAddress.toLowerCase();
-      if (seen.has(addr)) return false;
-      seen.add(addr);
-      return true;
-    });
-  }, [following]);
+    followerAddresses,
+    followingAddresses,
+    followerProfiles,
+    followingProfiles,
+    isLoading: isLoadingFollows,
+  } = useLsp26Follows(fetchAddress || undefined);
 
   const followersSet = useMemo(() =>
-    new Set((uniqueFollowers || []).map(f => f.followerAddress.toLowerCase())),
-    [uniqueFollowers]
+    new Set(followerAddresses),
+    [followerAddresses]
   );
 
   const followingSet = useMemo(() =>
-    new Set((uniqueFollowing || []).map(f => f.followedAddress.toLowerCase())),
-    [uniqueFollowing]
+    new Set(followingAddresses),
+    [followingAddresses]
   );
 
   const mutualSet = useMemo(() => {
@@ -319,22 +271,22 @@ export function SocialGraph({ address, active = true, onViewMode }: SocialGraphP
   }, [followersSet, followingSet]);
 
   const filteredFollowers = useMemo(() => {
-    if (!searchQuery) return uniqueFollowers;
+    if (!searchQuery) return followerAddresses;
     const query = searchQuery.toLowerCase();
-    return uniqueFollowers.filter(f => {
-      const name = f.followerProfile?.name || 'Unknown';
-      return name.toLowerCase().includes(query) || f.followerAddress.toLowerCase().includes(query);
+    return followerAddresses.filter(addr => {
+      const name = followerProfiles.get(addr)?.name || 'Unknown';
+      return name.toLowerCase().includes(query) || addr.toLowerCase().includes(query);
     });
-  }, [uniqueFollowers, searchQuery]);
+  }, [followerAddresses, followerProfiles, searchQuery]);
 
   const filteredFollowing = useMemo(() => {
-    if (!searchQuery) return uniqueFollowing;
+    if (!searchQuery) return followingAddresses;
     const query = searchQuery.toLowerCase();
-    return uniqueFollowing.filter(f => {
-      const name = f.followedProfile?.name || 'Unknown';
-      return name.toLowerCase().includes(query) || f.followedAddress.toLowerCase().includes(query);
+    return followingAddresses.filter(addr => {
+      const name = followingProfiles.get(addr)?.name || 'Unknown';
+      return name.toLowerCase().includes(query) || addr.toLowerCase().includes(query);
     });
-  }, [uniqueFollowing, searchQuery]);
+  }, [followingAddresses, followingProfiles, searchQuery]);
 
   const handleSelectProfile = useCallback((addr: string) => {
     _setSocialPopupOpen(true);
@@ -355,19 +307,25 @@ export function SocialGraph({ address, active = true, onViewMode }: SocialGraphP
   const showPlaceholder = !targetAddress;
 
   // Prepare row data for virtualizer（全件 — 検索対象）
-  const followingRows = useMemo(() => filteredFollowing.map((item: any) => ({
-    addr: item.followedAddress,
-    name: item.followedProfile?.name || 'Unknown',
-    indexerImageUrl: toGatewayUrl(item.followedProfile?.profileImage?.[0]?.url ?? '') ?? undefined,
-    isMutual: mutualSet.has(item.followedAddress.toLowerCase()),
-  })), [filteredFollowing, mutualSet]);
+  const followingRows = useMemo(() => filteredFollowing.map((addr) => {
+    const profile = followingProfiles.get(addr);
+    return {
+      addr,
+      name: profile?.name || 'Unknown',
+      indexerImageUrl: toGatewayUrl(profile?.profileImage ?? '') ?? undefined,
+      isMutual: mutualSet.has(addr),
+    };
+  }), [filteredFollowing, followingProfiles, mutualSet]);
 
-  const followerRows = useMemo(() => filteredFollowers.map((item: any) => ({
-    addr: item.followerAddress,
-    name: item.followerProfile?.name || 'Unknown',
-    indexerImageUrl: toGatewayUrl(item.followerProfile?.profileImage?.[0]?.url ?? '') ?? undefined,
-    isMutual: mutualSet.has(item.followerAddress.toLowerCase()),
-  })), [filteredFollowers, mutualSet]);
+  const followerRows = useMemo(() => filteredFollowers.map((addr) => {
+    const profile = followerProfiles.get(addr);
+    return {
+      addr,
+      name: profile?.name || 'Unknown',
+      indexerImageUrl: toGatewayUrl(profile?.profileImage ?? '') ?? undefined,
+      isMutual: mutualSet.has(addr),
+    };
+  }), [filteredFollowers, followerProfiles, mutualSet]);
 
   // 表示件数で切り出し（Load more = displayLimit を増やすだけ）
   const displayedFollowingRows = useMemo(
