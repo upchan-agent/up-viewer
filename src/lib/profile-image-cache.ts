@@ -105,12 +105,15 @@ export function fetchProfileCache(address: string, priority = false) {
 }
 
 // ─── Hook: useResolvedProfileImage ─────────────────────────
-// Priority chain:
+// Priority chain (per-field, NOT all-or-nothing):
 //   1. indexerImageUrl / indexerBackgroundImageUrl (lsp-indexer)
-//   2. erc725.js (_profileCache) — only when indexer has no images
+//   2. erc725.js (_profileCache) — fills gaps when indexer is partial
 //   3. indexerAvatarUrl (lsp-indexer fallback)
 //
-// Once resolved, no extra fetches are triggered.
+// Bug fix (2026-04-19): Previously, if the indexer had *any* image
+// (profileImage OR backgroundImage), erc725 was skipped entirely and
+// the missing field stayed null — even if erc725 had it.
+// Now each field falls back independently.
 
 interface ResolvedProfileImage {
   profileImageUrl: string | null;
@@ -134,35 +137,84 @@ export function useResolvedProfileImage({
   const [, setTick] = useState(0);
   useEffect(() => subscribeProfileCache(key, () => setTick(t => t + 1)), [key]);
 
-  // Only fetch via erc725 when indexer has no images
-  useEffect(() => {
-    if (indexerImageUrl || indexerBackgroundImageUrl) return;
-    fetchProfileCache(key);
-  }, [key, indexerImageUrl, indexerBackgroundImageUrl]);
+  // Fetch erc725 only when indexer has NO images AND cache not yet settled
+  const hasAnyIndexerImage = !!(indexerImageUrl || indexerBackgroundImageUrl);
+  const cached = _profileCache.has(key) ? _profileCache.get(key) : undefined;
+  const isCacheSettled = cached !== undefined;
 
-  // Has indexer image? → resolved immediately, no erc725 needed
-  if (indexerImageUrl || indexerBackgroundImageUrl) {
+  useEffect(() => {
+    if (hasAnyIndexerImage && isCacheSettled) return; // cache already has what we need
+    if (hasAnyIndexerImage) {
+      // Indexer has something but cache not settled — fetch to fill gaps
+      fetchProfileCache(key);
+      return;
+    }
+    if (!isCacheSettled) {
+      fetchProfileCache(key);
+    }
+  }, [key, hasAnyIndexerImage, isCacheSettled]);
+
+  // If indexer has both images, no need to wait for cache
+  if (indexerImageUrl && indexerBackgroundImageUrl) {
     return {
-      profileImageUrl: indexerImageUrl ?? null,
-      backgroundImageUrl: indexerBackgroundImageUrl ?? null,
+      profileImageUrl: indexerImageUrl,
+      backgroundImageUrl: indexerBackgroundImageUrl,
       scheme: 'indexer',
     };
   }
 
-  const cached = _profileCache.has(key) ? _profileCache.get(key) : undefined;
-  const isCacheSettled = cached !== undefined;
+  // If indexer has no images, wait for erc725 cache
+  if (!hasAnyIndexerImage) {
+    if (!isCacheSettled) return undefined; // still resolving
 
-  if (!isCacheSettled) return undefined; // still resolving
+    if (cached?.profileImageUrl) {
+      return {
+        profileImageUrl: cached.profileImageUrl,
+        backgroundImageUrl: cached.backgroundImageUrl,
+        scheme: 'erc725',
+      };
+    }
 
-  if (cached?.profileImageUrl) {
+    // 3rd: avatar fallback
+    if (indexerAvatarUrl) {
+      return {
+        profileImageUrl: indexerAvatarUrl,
+        backgroundImageUrl: null,
+        scheme: 'indexer.avatar',
+      };
+    }
+
+    return { profileImageUrl: null, backgroundImageUrl: null, scheme: 'none' };
+  }
+
+  // Indexer has partial images — merge with erc725 cache to fill gaps
+  if (!isCacheSettled) {
+    // Return what indexer has now; cache will trigger re-render when ready
     return {
-      profileImageUrl: cached.profileImageUrl,
-      backgroundImageUrl: cached.backgroundImageUrl,
-      scheme: 'erc725',
+      profileImageUrl: indexerImageUrl ?? null,
+      backgroundImageUrl: indexerBackgroundImageUrl ?? null,
+      scheme: 'indexer(partial)',
     };
   }
 
-  // 3rd: avatar fallback
+  // Merge: indexer wins, cache fills gaps
+  const mergedProfileImageUrl = indexerImageUrl ?? cached?.profileImageUrl ?? null;
+  const mergedBackgroundImageUrl = indexerBackgroundImageUrl ?? cached?.backgroundImageUrl ?? null;
+  const mergedScheme = indexerImageUrl && indexerBackgroundImageUrl
+    ? 'indexer'
+    : (indexerImageUrl || indexerBackgroundImageUrl) && (cached?.profileImageUrl || cached?.backgroundImageUrl)
+      ? 'indexer+erc725'
+      : (indexerImageUrl || indexerBackgroundImageUrl) ? 'indexer' : 'erc725';
+
+  if (mergedProfileImageUrl || mergedBackgroundImageUrl) {
+    return {
+      profileImageUrl: mergedProfileImageUrl,
+      backgroundImageUrl: mergedBackgroundImageUrl,
+      scheme: mergedScheme,
+    };
+  }
+
+  // Both indexer (partial) and erc725 are empty — try avatar
   if (indexerAvatarUrl) {
     return {
       profileImageUrl: indexerAvatarUrl,
@@ -171,7 +223,7 @@ export function useResolvedProfileImage({
     };
   }
 
-  return { profileImageUrl: null, backgroundImageUrl: cached?.backgroundImageUrl ?? null, scheme: 'none' };
+  return { profileImageUrl: null, backgroundImageUrl: null, scheme: 'none' };
 }
 
 // ─── Direct cache read (for debug / popup rendering) ──────

@@ -229,7 +229,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     fontFamily: '"Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif',
   },
   titleText: {
-    background: 'linear-gradient(135deg, #ffffff 0%, #e0e7ff 100%)',
+    background: 'var(--gradient-title-text)',
     WebkitBackgroundClip: 'text',
     WebkitTextFillColor: 'transparent',
     backgroundClip: 'text',

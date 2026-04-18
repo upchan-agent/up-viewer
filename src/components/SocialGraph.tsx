@@ -44,14 +44,12 @@ const ProfileListItem = memo(function ProfileListItem({
   const resolved = useResolvedProfileImage({ address, indexerImageUrl });
   const imageUrl = resolved?.profileImageUrl || undefined;
 
-  const initialsFallback = <div style={styles.itemAvatarPlaceholder}>{name.charAt(0).toUpperCase()}</div>;
-
   return (
     <div className="list-item" style={styles.item} onClick={() => onSelect(address)}>
       {imageUrl ? (
-        <ErrorImage src={imageUrl} style={styles.itemAvatar} fallback={initialsFallback} />
+        <ErrorImage src={imageUrl} style={styles.itemAvatar} fallback={<div style={styles.itemAvatarPlaceholder} />} />
       ) : (
-        initialsFallback
+        <div style={styles.itemAvatarPlaceholder} />
       )}
       <div style={styles.itemInfo}>
         <span style={styles.itemName}>{name}{isMutual && ' 🤝'}</span>
@@ -124,10 +122,12 @@ const ProfileVirtualList = memo(function ProfileVirtualList({
 
 function ProfilePopupContent({
   address,
+  name: initialName,
   onClose,
   onView,
 }: {
   address: string;
+  name?: string;
   onClose: () => void;
   onView?: (address: string) => void;
 }) {
@@ -149,8 +149,13 @@ function ProfilePopupContent({
 
   useEffect(() => {
     if (isLoading) return;
-    const hasIndexerUrl = profile?.profileImage?.[0]?.url || profile?.backgroundImage?.[0]?.url;
-    if (hasIndexerUrl) return;
+    // Only skip erc725 when indexer has BOTH images — partial indexer data
+    // means we still need erc725 to fill gaps (e.g. profileImage exists but
+    // backgroundImage is missing on the indexer).
+    const hasBothIndexerUrls = !!(
+      profile?.profileImage?.[0]?.url && profile?.backgroundImage?.[0]?.url
+    );
+    if (hasBothIndexerUrls) return;
     fetchProfileCache(key, true); // priority=true — bypasses popup defer gate
   }, [isLoading, key]);
 
@@ -195,7 +200,7 @@ function ProfilePopupContent({
   ];
 
   const links: PopupLink[] = (profile?.links ?? []).map((l: any) => ({ title: l.title, url: l.url }));
-  const name = profile?.name || 'Unknown';
+  const name = profile?.name || initialName || 'Unknown';
 
   return (
     <Popup
@@ -203,8 +208,8 @@ function ProfilePopupContent({
       image={{ url: isStillLoading ? null : resolvedProfileImageUrl, scheme: imageScheme }}
       backgroundImage={resolvedBackgroundImageUrl ?? undefined}
       useBannerLayout={true}
-      placeholderInitial={name.charAt(0).toUpperCase()}
       name={name}
+      isLoading={false}
       subLabel={address}
       description={profile?.description ?? undefined}
       tags={profile?.tags ?? undefined}
@@ -292,6 +297,14 @@ export function SocialGraph({ address, active = true, onViewMode }: SocialGraphP
     _setSocialPopupOpen(true);
     setSelectedAddress(addr);
   }, []);
+
+  const selectedName = useMemo(() => {
+    if (!selectedAddress) return undefined;
+    const key = selectedAddress.toLowerCase();
+    return followingProfiles.get(key)?.name
+      ?? followerProfiles.get(key)?.name
+      ?? undefined;
+  }, [selectedAddress, followingProfiles, followerProfiles]);
 
   const handleClosePopup = useCallback(() => {
     _setSocialPopupOpen(false);
@@ -389,6 +402,7 @@ export function SocialGraph({ address, active = true, onViewMode }: SocialGraphP
       {selectedAddress && (
         <ProfilePopupContent
           address={selectedAddress}
+          name={selectedName}
           onClose={handleClosePopup}
           onView={onViewMode}
         />
@@ -498,13 +512,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     width: 'var(--avatar-size-sm)',
     height: 'var(--avatar-size-sm)',
     borderRadius: 'var(--radius-full)',
-    background: 'var(--gradient-brand)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    fontSize: 'var(--text-xs)',
-    fontWeight: 'bold',
-    color: 'var(--color-text-white)',
+    background: 'var(--color-surface-muted)',
     flexShrink: 0,
   },
   itemInfo: {

@@ -65,10 +65,10 @@ export interface PopupProps {
   backgroundImage?: string;       // banner background image
   useBannerLayout?: boolean;      // always use banner+avatar layout (Social profiles)
   placeholderEmoji?: string;      // shown when no image — defaults to '🖼️'
-  placeholderInitial?: string;    // shown in avatar when no image (1 char)
 
   // Header
   name?: string;
+  isLoading?: boolean;            // show skeleton for name
   subLabel?: string;              // symbol, token ID, address, etc.
 
   // Body
@@ -101,8 +101,8 @@ export const Popup = memo(function Popup({
   backgroundImage,
   useBannerLayout = false,
   placeholderEmoji = '🖼️',
-  placeholderInitial,
   name,
+  isLoading,
   subLabel,
   description,
   tags,
@@ -131,19 +131,11 @@ export const Popup = memo(function Popup({
     setDebugOpen(open => !open);
   }, []);
 
-  const isLoading = image?.scheme === 'loading';
-
-  // Banner avatar fallback (timeout時)
-  const avatarFallback = placeholderInitial
-    ? <span style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--color-text-white)' }}>{placeholderInitial}</span>
-    : <span style={{ fontSize: '1.4rem' }}>{placeholderEmoji}</span>;
-
+  // Banner avatar fallback (timeout時 / ローディング中 / 画像なし)
   // Banner avatar content — what to show inside the circular avatar
-  const avatarContent = isLoading
-    ? <span style={{ fontSize: '1rem', color: 'var(--color-text-faint)' }}>⏳</span>
-    : image?.url
-      ? <ErrorImage src={image.url} style={styles.bannerAvatar} fallback={avatarFallback} />
-      : avatarFallback;
+  const avatarContent = image?.url
+    ? <ErrorImage src={image.url} style={styles.bannerAvatar} fallback={<div style={styles.bannerAvatarPlaceholder} />} />
+    : <div style={styles.bannerAvatarPlaceholder} />;
 
   return (
     <div style={styles.overlay} onClick={onClose}>
@@ -178,9 +170,7 @@ export const Popup = memo(function Popup({
             </div>
             <div style={{
               ...styles.bannerAvatarWrapper,
-              background: (!image?.url && !placeholderInitial)
-                ? 'var(--color-border-default)'
-                : 'var(--color-surface-muted)',
+              background: 'var(--color-border-default)',
             }}>
               {avatarContent}
             </div>
@@ -197,7 +187,9 @@ export const Popup = memo(function Popup({
 
         {/* ── Header ──────────────────────────────────────── */}
         <div style={{ ...styles.header, ...(useBannerLayout ? { marginTop: '36px' } : {}) }}>
-          {name && <h3 style={styles.name}>{name}</h3>}
+          {isLoading
+            ? <div className="skim" style={{ width: '120px', height: '22px', borderRadius: 'var(--radius-xs)' }} />
+            : name && <h3 style={styles.name}>{name}</h3>}
           {subLabel && <span style={styles.subLabel}>{subLabel}</span>}
           {onView && (
             <button
@@ -374,6 +366,7 @@ const styles: Record<string, React.CSSProperties> = {
     boxShadow: 'var(--shadow-avatar)',
   },
   bannerAvatar: { width: '100%', height: '100%', objectFit: 'cover' },
+  bannerAvatarPlaceholder: { width: '100%', height: '100%', borderRadius: 'var(--radius-full)', background: 'var(--color-surface-muted)' },
 
   // ヘッダー
   header: { marginBottom: 'var(--space-2)', marginTop: '0' },

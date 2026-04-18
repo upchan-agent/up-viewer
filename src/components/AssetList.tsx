@@ -19,6 +19,7 @@ import {
   _apiCache,
 } from '@/lib/asset-image-cache';
 import type { ResolvedIcon, ResolvedAssetImage } from '@/lib/asset-image-cache';
+import { LazyRow } from '@/components/LazyRow';
 
 interface AssetListProps {
   address?: `0x${string}`;
@@ -507,7 +508,7 @@ export function AssetList({ address, active = true }: AssetListProps) {
   //         Load more は追加フェッチではなく表示件数の拡張のみ。
   //         DOM に乗るのは displayLimit 件数分のみ → 端末負荷を抑制。
 
-  const fetchAddress = shouldFetch ? (targetAddress?.toLowerCase() || '') : '';
+  const fetchAddress = shouldFetch && targetAddress ? targetAddress.toLowerCase() : undefined;
 
   const {
     ownedAssets, hasNextPage: hasMoreAssets, fetchNextPage: fetchMoreAssets,
@@ -755,14 +756,20 @@ export function AssetList({ address, active = true }: AssetListProps) {
         );
       case 'nft-child':
         return (
-          <NftChildItem
-            entry={row.child}
-            collectionFallbackIcon={row.child.collectionFallbackIcon}
-            handleSelectAsset={handleSelectAsset}
-          />
+          <LazyRow>
+            <NftChildItem
+              entry={row.child}
+              collectionFallbackIcon={row.child.collectionFallbackIcon}
+              handleSelectAsset={handleSelectAsset}
+            />
+          </LazyRow>
         );
       case 'lsp7-single':
-        return <Lsp7SingleNftListItem item={row.item} onSelect={handleSelectAsset} />;
+        return (
+          <LazyRow>
+            <Lsp7SingleNftListItem item={row.item} onSelect={handleSelectAsset} />
+          </LazyRow>
+        );
     }
   }, [expandedSections, toggleSection, toggleCollection, handleSelectAsset]);
 
