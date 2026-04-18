@@ -158,7 +158,7 @@ export const Popup = memo(function Popup({
                 the image bytes arrive. No image → grey placeholder. */}
             <div style={{
               ...styles.bannerBackground,
-              background: backgroundImage ? 'transparent' : 'var(--color-border-default)',
+              background: backgroundImage ? 'transparent' : 'var(--color-state-resolving)',
             }}>
               {backgroundImage && (
                 <ErrorImage
@@ -333,7 +333,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 'var(--radius-xl)',
     overflow: 'hidden', marginBottom: 'var(--space-3)',
     display: 'flex', justifyContent: 'center', alignItems: 'center',
-    background: 'var(--color-surface-muted)', flexShrink: 0,
+    background: 'var(--color-state-resolving)', flexShrink: 0,
   },
   image: { maxWidth: '100%', maxHeight: '160px', objectFit: 'contain' },
   loadingText: { color: 'var(--color-text-faint)', fontSize: 'var(--text-md)' },
@@ -344,6 +344,7 @@ const styles: Record<string, React.CSSProperties> = {
     width: '100%', marginBottom: 'var(--space-3)', position: 'relative',
     borderRadius: 'var(--radius-xl)', overflow: 'visible',
   },
+  // バナー背景（画像なし時）— トークン統一
   bannerBackground: {
     width: '100%', height: '100px',
     borderRadius: 'var(--radius-xl)',
@@ -366,7 +367,7 @@ const styles: Record<string, React.CSSProperties> = {
     boxShadow: 'var(--shadow-avatar)',
   },
   bannerAvatar: { width: '100%', height: '100%', objectFit: 'cover' },
-  bannerAvatarPlaceholder: { width: '100%', height: '100%', borderRadius: 'var(--radius-full)', background: 'var(--color-surface-muted)' },
+  bannerAvatarPlaceholder: { width: '100%', height: '100%', borderRadius: 'var(--radius-full)', background: 'var(--color-state-resolving)', border: '2px solid var(--color-state-empty)' },
 
   // ヘッダー
   header: { marginBottom: 'var(--space-2)', marginTop: '0' },

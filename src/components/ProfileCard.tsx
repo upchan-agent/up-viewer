@@ -308,8 +308,8 @@ const styles: { [key: string]: React.CSSProperties } = {
 
   // ── スケルトン ──
   skeletonIcon: {
-    width: 'var(--avatar-size-sm)',
-    height: 'var(--avatar-size-sm)',
+    width: 'var(--text-sm)',
+    height: 'var(--text-sm)',
     borderRadius: 'var(--radius-full)',
     flexShrink: 0,
   },
@@ -441,7 +441,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     height: 'var(--avatar-size-lg)',
     borderRadius: 'var(--radius-full)',
     objectFit: 'cover',
-    border: '3px solid rgba(255,255,255,0.8)',
+    border: '1px solid var(--color-state-empty-subtle)',
     boxShadow: 'var(--shadow-avatar)',
     flexShrink: 0,
   },
@@ -456,7 +456,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     fontSize: '1.5rem',
     fontWeight: 'bold',
     color: 'var(--color-text-white)',
-    border: '3px solid rgba(255,255,255,0.3)',
+    border: '1px solid var(--color-state-empty-subtle)',
     flexShrink: 0,
   },
   loadingSpinner: {

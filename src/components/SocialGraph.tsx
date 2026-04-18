@@ -512,7 +512,8 @@ const styles: { [key: string]: React.CSSProperties } = {
     width: 'var(--avatar-size-sm)',
     height: 'var(--avatar-size-sm)',
     borderRadius: 'var(--radius-full)',
-    background: 'var(--color-surface-muted)',
+    background: 'var(--color-state-resolving)',
+    border: '1px solid var(--color-state-empty)',
     flexShrink: 0,
   },
   itemInfo: {

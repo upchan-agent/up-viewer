@@ -15,8 +15,8 @@
   --color-surface-input:       #ffffff;
   --color-surface-tag:         #edf2f7;
   --color-surface-danger-light:#fed7d7;
-  --color-surface-skeleton:    #e0e0e0;
-  --color-surface-skeleton-mid:#d0d0d0;
+  --color-surface-skeleton:    var(--color-state-shimmer);
+  --color-surface-skeleton-mid: var(--color-state-shimmer-mid);
   --color-surface-attr:        #f7fafc;
   --color-surface-debug:       #f9fafb;
   --color-surface-debug-body:  #fef2f2;
@@ -45,6 +45,13 @@
   --color-border-default: #e2e8f0;
   --color-border-muted:   #cbd5e0;
   --color-border-debug:   #e5e7eb;
+
+  /* --- State colors (loading / resolving / empty) --- */
+  --color-state-shimmer:     #e2e8f0;  /* スケルトン shimmer ベース */
+  --color-state-shimmer-mid: #cbd5e0;  /* スケルトン shimmer ハイライト */
+  --color-state-resolving:   #f0f0f0;  /* 画像解決中プレースホルダー — グレー（shimmerより明るい） */
+  --color-state-empty:       #e5e5e5;  /* 画像なし・解決失敗 — 薄めのグレー（ボーダー用） */
+  --color-state-empty-subtle: #f0f0f0;  /* プレースホルダーボーダー用 — より薄いグレー */
 
   /* --- Border radius --- */
   --radius-xs:   4px;
