@@ -19,7 +19,6 @@ import {
   _apiCache,
 } from '@/lib/asset-image-cache';
 import type { ResolvedIcon, ResolvedAssetImage } from '@/lib/asset-image-cache';
-import { LazyRow } from '@/components/LazyRow';
 
 interface AssetListProps {
   address?: `0x${string}`;
@@ -756,19 +755,15 @@ export function AssetList({ address, active = true }: AssetListProps) {
         );
       case 'nft-child':
         return (
-          <LazyRow>
             <NftChildItem
               entry={row.child}
               collectionFallbackIcon={row.child.collectionFallbackIcon}
               handleSelectAsset={handleSelectAsset}
             />
-          </LazyRow>
         );
       case 'lsp7-single':
         return (
-          <LazyRow>
             <Lsp7SingleNftListItem item={row.item} onSelect={handleSelectAsset} />
-          </LazyRow>
         );
     }
   }, [expandedSections, toggleSection, toggleCollection, handleSelectAsset]);
