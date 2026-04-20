@@ -191,15 +191,19 @@ export const Popup = memo(function Popup({
             ? <div className="skim" style={{ width: '120px', height: '22px', borderRadius: 'var(--radius-xs)' }} />
             : name && <h3 style={styles.name}>{name}</h3>}
           {subLabel && <span style={styles.subLabel}>{subLabel}</span>}
-          {onView && (
+        </div>
+
+        {/* ── View button ─────────────────────────────────── */}
+        {onView && (
+          <div style={styles.viewRow}>
             <button
               style={styles.viewButton}
               onClick={(e) => { e.stopPropagation(); onView(); }}
             >
               {viewLabel}
             </button>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* ── Tags ────────────────────────────────────────── */}
         {!!(tags?.length) && (
@@ -227,7 +231,7 @@ export const Popup = memo(function Popup({
 
         {/* ── External URL ────────────────────────────────── */}
         {externalUrl && (
-          <div style={{ marginBottom: '8px' }}>
+          <div style={{ marginBottom: 'var(--space-1)' }}>
             <span style={styles.statLabel}>{externalUrl.label}</span>
             <span style={styles.statValue}>
               <a
@@ -244,7 +248,7 @@ export const Popup = memo(function Popup({
 
         {/* ── Links ───────────────────────────────────────── */}
         {!!(links?.length) && (
-          <div style={{ marginBottom: '8px' }}>
+          <div style={{ marginBottom: 'var(--space-1)' }}>
             <span style={styles.statLabel}>Links</span>
             <div style={styles.linksRow}>
               {links.map((l, i) => (
@@ -264,7 +268,7 @@ export const Popup = memo(function Popup({
 
         {/* ── Attributes ──────────────────────────────────── */}
         {!!(attributes?.length) && (
-          <div style={{ marginBottom: '8px' }}>
+          <div style={{ marginBottom: 'var(--space-1)' }}>
             <span style={styles.statLabel}>Attributes</span>
             <div style={styles.attributesGrid}>
               {attributes.slice(0, 12).map((a, i) => (
@@ -317,12 +321,12 @@ const styles: Record<string, React.CSSProperties> = {
     maxWidth: '420px', width: '90%',
     height: '70vh',     // 固定高さでコンテンツロード時のサイズシフトを防ぐ
     overflowY: 'auto', overflowX: 'hidden',
-    position: 'relative', padding: 'var(--space-4)',
+    position: 'relative', padding: '12px',
     animation: 'popupIn 0.2s ease', transformOrigin: 'center',
     boxSizing: 'border-box',
   },
   closeButton: {
-    position: 'absolute', top: 'var(--space-2)', right: 'var(--space-3)',
+    position: 'absolute', top: '12px', right: '12px',
     background: 'none', border: 'none', fontSize: '1.5rem',
     cursor: 'pointer', color: 'var(--color-text-muted)', lineHeight: 1, zIndex: 2,
   },
@@ -331,7 +335,7 @@ const styles: Record<string, React.CSSProperties> = {
   imageWrapper: {
     width: '100%', height: '160px',
     borderRadius: 'var(--radius-xl)',
-    overflow: 'hidden', marginBottom: 'var(--space-3)',
+    overflow: 'hidden', marginBottom: 'var(--space-1)',
     display: 'flex', justifyContent: 'center', alignItems: 'center',
     background: 'var(--color-state-resolving)', flexShrink: 0,
   },
@@ -341,7 +345,7 @@ const styles: Record<string, React.CSSProperties> = {
 
   // バナー＋アバターレイアウト（Social）
   bannerWrapper: {
-    width: '100%', marginBottom: 'var(--space-3)', position: 'relative',
+    width: '100%', marginBottom: 'var(--space-1)', position: 'relative',
     borderRadius: 'var(--radius-xl)', overflow: 'visible',
   },
   // バナー背景（画像なし時）— トークン統一
@@ -357,7 +361,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'block',
   },
   bannerAvatarWrapper: {
-    position: 'absolute', bottom: '-28px', left: 'var(--space-4)',
+    position: 'absolute', bottom: '-28px', left: '16px',
     width: '64px', height: '64px',
     borderRadius: 'var(--radius-full)',
     border: '3px solid var(--color-surface-input)',
@@ -370,7 +374,7 @@ const styles: Record<string, React.CSSProperties> = {
   bannerAvatarPlaceholder: { width: '100%', height: '100%', borderRadius: 'var(--radius-full)', background: 'var(--color-state-resolving)', border: '2px solid var(--color-state-empty)' },
 
   // ヘッダー
-  header: { marginBottom: 'var(--space-2)', marginTop: '0' },
+  header: { marginBottom: 'var(--space-1)', marginTop: '0' },
   name: {
     fontSize: 'var(--text-xl)', fontWeight: '700',
     color: 'var(--color-text-primary)', margin: 0, lineHeight: 1.3,
@@ -380,7 +384,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
 
   // タグ
-  tagsRow: { display: 'flex', flexWrap: 'wrap', gap: 'var(--space-1)', marginBottom: 'var(--space-2)' },
+  tagsRow: { display: 'flex', flexWrap: 'wrap', gap: 'var(--space-1)', marginBottom: 'var(--space-1)' },
   tag: {
     fontSize: 'var(--text-sm)', padding: '2px 8px',
     background: 'var(--color-surface-tag)',
@@ -391,13 +395,13 @@ const styles: Record<string, React.CSSProperties> = {
   // 説明文
   description: {
     fontSize: 'var(--text-md)', color: 'var(--color-text-secondary)', lineHeight: 1.5,
-    margin: '0 0 var(--space-2) 0', wordBreak: 'break-word', whiteSpace: 'pre-wrap',
+    margin: '0 0 var(--space-1) 0', wordBreak: 'break-word', whiteSpace: 'pre-wrap',
   },
 
   // Stats グリッド
   statsGrid: {
     display: 'grid', gridTemplateColumns: '1fr 1fr',
-    gap: 'var(--space-2)', marginBottom: 'var(--space-2)',
+    gap: 'var(--space-1)', marginBottom: 'var(--space-1)',
   },
   statLabel: {
     display: 'block', fontSize: 'var(--text-sm)', color: 'var(--color-text-faint)',
@@ -412,8 +416,10 @@ const styles: Record<string, React.CSSProperties> = {
   link: { color: 'var(--color-text-link)', textDecoration: 'none', wordBreak: 'break-all' },
 
   // View ボタン
+  viewRow: {
+    marginBottom: 'var(--space-1)',
+  },
   viewButton: {
-    marginTop: 'var(--space-1)',
     padding: '4px 12px',
     border: 'none',
     borderRadius: 'var(--radius-md)',
@@ -453,19 +459,19 @@ const styles: Record<string, React.CSSProperties> = {
 
 const debugStyles: Record<string, React.CSSProperties> = {
   container: {
-    marginTop: 'var(--space-2)', fontSize: '0.58rem', color: 'var(--color-text-muted)',
+    marginTop: 'var(--space-1)', fontSize: '0.58rem', color: 'var(--color-text-muted)',
     borderRadius: 'var(--radius-sm)',
     border: `1px solid var(--color-border-debug)`, overflow: 'hidden',
   },
   toggle: {
     width: '100%', textAlign: 'left', border: 'none', cursor: 'pointer',
-    padding: '4px var(--space-2)',
+    padding: '4px var(--space-1)',
     background: 'var(--color-surface-debug)',
     fontWeight: 600, fontSize: 'var(--text-xs)',
     color: 'var(--color-text-debug)', userSelect: 'none',
   },
   content: {
-    padding: '6px var(--space-2)',
+    padding: '6px var(--space-1)',
     background: 'var(--color-surface-debug-body)',
     whiteSpace: 'pre-wrap', wordBreak: 'break-all',
     lineHeight: '1.4', color: 'var(--color-text-debug-val)',
