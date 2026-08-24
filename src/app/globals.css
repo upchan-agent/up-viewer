@@ -4,47 +4,57 @@
    ──────────────────────────────────────────────────────────── */
 
 :root {
-  /* --- Brand gradient --- */
-  --gradient-brand: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  --gradient-title-text: linear-gradient(135deg, #ffffff 0%, #e0e7ff 100%);
+  /* --- Portrait tokens --- */
+  --paper: #e8edf4;
+  --ink: #1b2330;
+  --mute: #5c6b80;
+  --line: #c5cedb;
+  --accent: #3d6fd8;
+  --accent-soft: #d5e2f7;
+  --chip: rgba(16, 24, 40, 0.48);
+
+  /* Kept names so existing components pick up the new palette.
+     Do not use --gradient-brand as a page wash. */
+  --gradient-brand: var(--accent);
+  --gradient-title-text: var(--ink);
 
   /* --- Surface colors --- */
-  --color-surface-card:        rgba(255, 255, 255, 0.95);
-  --color-surface-muted:       #f7fafc;
-  --color-surface-hover:       #edf2f7;
+  --color-surface-card:        transparent;
+  --color-surface-muted:       transparent;
+  --color-surface-hover:       var(--accent-soft);
   --color-surface-input:       #ffffff;
-  --color-surface-tag:         #edf2f7;
+  --color-surface-tag:         var(--accent-soft);
   --color-surface-danger-light:#fed7d7;
   --color-surface-skeleton:    var(--color-state-shimmer);
   --color-surface-skeleton-mid: var(--color-state-shimmer-mid);
-  --color-surface-attr:        #f7fafc;
-  --color-surface-debug:       #f9fafb;
+  --color-surface-attr:        var(--accent-soft);
+  --color-surface-debug:       #f4f7fb;
   --color-surface-debug-body:  #fef2f2;
-  --color-surface-tab-inactive:#f7fafc;
-  --color-surface-nft-header:  #f8fafc;
+  --color-surface-tab-inactive:transparent;
+  --color-surface-nft-header:  transparent;
 
   /* --- Text colors --- */
-  --color-text-primary:   #1a202c;
-  --color-text-secondary: #4a5568;
-  --color-text-muted:     #718096;
-  --color-text-faint:     #a0aec0;
-  --color-text-white:     #ffffff;
+  --color-text-primary:   var(--ink);
+  --color-text-secondary: var(--ink);
+  --color-text-muted:     var(--mute);
+  --color-text-faint:     var(--mute);
+  --color-text-white:     #f4f7fb;
 
   /* --- Semantic text --- */
-  --color-text-connected: #48bb78;
-  --color-text-viewing:   #805ad5;
-  --color-text-viewmode:  #3182ce;
-  --color-text-link:      #667eea;
+  --color-text-connected: var(--ink);
+  --color-text-viewing:   var(--ink);
+  --color-text-viewmode:  var(--ink);
+  --color-text-link:      var(--accent);
   --color-text-danger:    #e53e3e;
-  --color-text-tag:       #4a5568;
+  --color-text-tag:       var(--ink);
   --color-text-debug:     #374151;
   --color-text-debug-val: #e74c3c;
-  --color-text-section:   #4a5568;
+  --color-text-section:   var(--mute);
 
   /* --- Border colors --- */
-  --color-border-default: #e2e8f0;
-  --color-border-muted:   #cbd5e0;
-  --color-border-debug:   #e5e7eb;
+  --color-border-default: var(--line);
+  --color-border-muted:   var(--line);
+  --color-border-debug:   var(--line);
 
   /* --- State colors (loading / resolving / empty) --- */
   --color-state-shimmer:     #e2e8f0;  /* スケルトン shimmer ベース */
@@ -76,12 +86,13 @@
   --space-6: 24px;
 
   /* --- Font sizes --- */
-  --text-xs:   0.65rem;
-  --text-sm:   0.7rem;
-  --text-base: 0.75rem;
-  --text-md:   0.85rem;
-  --text-lg:   1rem;
-  --text-xl:   1.1rem;
+  /* Bumped one step for accessibility (was: xs .65 / sm .7 / base .75) */
+  --text-xs:   0.7rem;
+  --text-sm:   0.75rem;
+  --text-base: 0.8rem;
+  --text-md:   0.9rem;
+  --text-lg:   1.05rem;
+  --text-xl:   1.15rem;
 
   /* --- Layout --- */
   --content-max-width: 480px;
@@ -94,15 +105,16 @@
 
   /* --- Component sizes --- */
   --card-padding:     8px;
-  --tab-height:       42px;
+  --tab-height:       28px;
   --conn-bar-height:  24px;
-  --profile-section-height: 64px;
+  --profile-section-height: 56px;
+  --banner-height:    96px;
   --item-height:      40px;
   --list-item-gap:    3px;   /* リストアイテム間の隙間。変更時は virtualizer の estimateSize も合わせること */
   --list-min-height:  160px; /* リスト最低表示高さ（アイテム約4件分）。縦が狭い環境でも最低限操作可能に */
   --list-max-height:  450px; /* デスクトップ等でリストが広がりすぎる場合の上限（将来の動的計算の床として保持）*/
   --list-max-height:  450px;
-  --avatar-size-sm:   28px;
+  --avatar-size-sm:   36px;
   --avatar-size-lg:   56px;
 }
 
@@ -182,62 +194,33 @@ body {
 }
 
 /* ─── Scrollbar ──────────────────────────────────────────── */
+/* scrollbar-gutter: stable reserves space for the scrollbar without
+   forcing an always-visible bar (replaces the old overflowY:scroll hack).
+   Custom webkit scrollbar styling removed — native overlay scrollbars are
+   the platform-standard look on every OS. */
 
-/* ─── Scrollbar styling ──────────────────────────────────── */
-/* iOS Safari は ::-webkit-scrollbar を無視し、OS ネイティブの
-   オーバーレイバーを使う。スクロール中のみ表示されスクロール停止後
-   ~0.5秒で消えるのは CSS で変更不可の OS 仕様。
-   以下のスタイルは Chrome/Edge（デスクトップ）のみに適用される。  */
-
-::-webkit-scrollbar {
-  width: 12px;
-}
-
-::-webkit-scrollbar-track {
-  background: #f1f1f1;
-}
-
-::-webkit-scrollbar-button:single-button:vertical:decrement {
-  height: 12px;
-  background: #e0e0e0;
-  border: 1px solid #c0c0c0;
-  border-radius: 6px 6px 0 0;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 8 6'%3E%3Cpath d='M4 0L0 6h8z' fill='%23666'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: center;
-  background-size: 8px 6px;
-}
-
-::-webkit-scrollbar-button:single-button:vertical:decrement:hover {
-  background-color: #d0d0d0;
-}
-
-::-webkit-scrollbar-button:single-button:vertical:increment {
-  height: 12px;
-  background: #e0e0e0;
-  border: 1px solid #c0c0c0;
-  border-radius: 0 0 6px 6px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 8 6'%3E%3Cpath d='M0 0l4 6 4-6z' fill='%23666'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: center;
-  background-size: 8px 6px;
-}
-
-::-webkit-scrollbar-button:single-button:vertical:increment:hover {
-  background-color: #d0d0d0;
-}
-
-::-webkit-scrollbar-thumb {
-  background: #c0c0c0;
-  border: 2px solid #f1f1f1;
-  border-radius: 6px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #a0a0a0;
+html {
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
 }
 
 * {
-  scrollbar-width: thin;
-  scrollbar-color: #c0c0c0 #f1f1f1;
+  scrollbar-color: #c0c0c0 transparent;
+}
+
+/* ─── Accessibility ──────────────────────────────────────── */
+
+:focus-visible {
+  outline: 2px solid var(--color-text-link);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

@@ -2,20 +2,12 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { ethers } from 'ethers';
-import { LSP26_ADDRESS, LUKSO_RPC_URL } from '@/lib/constants';
+import { LSP26_ADDRESS } from '@/lib/constants';
+import { getRpcProvider } from '@/lib/rpc';
 
 // ─── LSP26 function selectors ───────────────────────────────
 const SELECTOR_FOLLOWER_COUNT = '0x30b3a890';
 const SELECTOR_FOLLOWING_COUNT = '0x64548707';
-
-// ─── Shared provider (singleton) ────────────────────────────
-let _provider: ethers.JsonRpcProvider | null = null;
-function getProvider(): ethers.JsonRpcProvider {
-  if (!_provider) {
-    _provider = new ethers.JsonRpcProvider(LUKSO_RPC_URL);
-  }
-  return _provider;
-}
 
 // ─── In-flight request dedup ────────────────────────────────
 const _inFlight = new Map<string, Promise<number>>();
@@ -37,7 +29,7 @@ async function fetchCount(
 
   const promise = (async () => {
     try {
-      const provider = getProvider();
+      const provider = getRpcProvider();
       const addrPadded = ethers.zeroPadValue(address, 32);
       const data = selector + addrPadded.slice(2); // selector + padded address
       const result = await provider.call({ to: LSP26_ADDRESS, data });

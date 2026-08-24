@@ -4,16 +4,18 @@ import { useUpProvider } from '@/lib/up-provider';
 import { useProfile } from '@lsp-indexer/react';
 import { useLsp26Counts } from '@/lib/useLsp26Counts';
 import { useLsp26Follows } from '@/lib/useLsp26Follows';
-import { toGatewayUrl } from '@/lib/utils';
+import { toGatewayUrl, shortenAddress } from '@/lib/utils';
 import { useState, useMemo, useEffect, useRef, useCallback, memo } from 'react';
 import { Popup } from '@/components/Popup';
 import type { PopupLink } from '@/components/Popup';
 import { ErrorImage } from '@/components/ErrorImage';
+import { traceHit, traceMiss, traceWait, isDebugEnabled, type TraceStep } from '@/lib/debug-trace';
 import {
+  useResolvedProfileImage,
   subscribeProfileCache,
   fetchProfileCache,
   setProfileCachePopupOpen as _setSocialPopupOpen,
-  useResolvedProfileImage,
+  resolveFromSources,
   getProfileCacheEntry,
   isProfileCacheSettled,
 } from '@/lib/profile-image-cache';
@@ -52,8 +54,8 @@ const ProfileListItem = memo(function ProfileListItem({
         <div style={styles.itemAvatarPlaceholder} />
       )}
       <div style={styles.itemInfo}>
-        <span style={styles.itemName}>{name}{isMutual && ' 🤝'}</span>
-        <span style={styles.itemAddress}>{address}</span>
+        <span style={styles.itemName}>{name}{isMutual ? ' · mutual' : ''}</span>
+        <span style={styles.itemAddress} title={address}>{shortenAddress(address)}</span>
       </div>
       <span style={{ fontSize: '1.2rem', color: 'var(--color-border-muted)', flexShrink: 0 }}>›</span>
     </div>
@@ -166,33 +168,56 @@ function ProfilePopupContent({
 
   const cached = getProfileCacheEntry(key);
   const isCacheSettled = isProfileCacheSettled(key);
-  const hasIndexerImage = !!(indexerProfileImageUrl || indexerBackgroundImageUrl);
 
-  const resolvedProfileImageUrl = indexerProfileImageUrl
-    ?? cached?.profileImageUrl
-    ?? indexerAvatarUrl
-    ?? null;
-  const resolvedBackgroundImageUrl = indexerBackgroundImageUrl
-    ?? cached?.backgroundImageUrl
-    ?? null;
+  // Shared resolution chain — identical to list rows (single source of truth)
+  const resolved = resolveFromSources({
+    indexerImageUrl: indexerProfileImageUrl,
+    indexerBackgroundImageUrl,
+    indexerAvatarUrl,
+    cacheSettled: isCacheSettled,
+    cached,
+  });
+  const isStillLoading = isLoading || resolved.scheme === 'loading';
+  const resolvedProfileImageUrl = resolved.profileImageUrl;
+  const resolvedBackgroundImageUrl = resolved.backgroundImageUrl;
+  const imageScheme = isStillLoading ? 'loading' : resolved.scheme;
 
-  const isStillLoading = isLoading || (!hasIndexerImage && !isCacheSettled);
-  const imageScheme = isStillLoading ? 'loading'
-    : indexerProfileImageUrl ? 'useProfile.profileImage'
-    : cached?.profileImageUrl ? 'erc725.profileImage'
-    : indexerAvatarUrl ? 'useProfile.avatar'
-    : 'none';
+  // Debug panel: shown always in dev, opt-in in prod via ?debug=1.
+  const debugEnabled = isDebugEnabled();
+  const debugSteps = useMemo((): TraceStep[] | undefined => {
+    if (!debugEnabled) return undefined;
+    if (isStillLoading) {
+      return [
+        indexerProfileImageUrl ? traceHit('1. useProfile.profileImage', indexerProfileImageUrl) : traceMiss('1. useProfile.profileImage', '(none)'),
+        indexerBackgroundImageUrl ? traceHit('1b. useProfile.backgroundImage', indexerBackgroundImageUrl) : traceMiss('1b. useProfile.backgroundImage', '(none)'),
+        traceWait('2. erc725.profileImage / backgroundImage'),
+        indexerAvatarUrl ? traceHit('3. useProfile.avatar', indexerAvatarUrl) : traceMiss('3. useProfile.avatar', '(none)'),
+      ];
+    }
+    return [
+      indexerProfileImageUrl ? traceHit('1. useProfile.profileImage', indexerProfileImageUrl) : traceMiss('1. useProfile.profileImage', '(none)'),
+      indexerBackgroundImageUrl ? traceHit('1b. useProfile.backgroundImage', indexerBackgroundImageUrl) : traceMiss('1b. useProfile.backgroundImage', '(none)'),
+      !isCacheSettled
+        ? traceWait('2. erc725.profileImage / backgroundImage')
+        : cached?.profileImageUrl || cached?.backgroundImageUrl
+          ? traceHit('2. erc725.profileImage / backgroundImage',
+              cached.profileImageUrl ?? cached.backgroundImageUrl ?? undefined)
+          : traceMiss('2. erc725.profileImage / backgroundImage', 'settled (null)'),
+      indexerAvatarUrl ? traceHit('3. useProfile.avatar', indexerAvatarUrl) : traceMiss('3. useProfile.avatar', '(none)'),
+      resolved.scheme !== 'none'
+        ? traceHit(`final: ${resolved.scheme}`, resolvedProfileImageUrl ?? undefined)
+        : traceMiss('final: no image'),
+    ];
+  }, [debugEnabled, isStillLoading, indexerProfileImageUrl, indexerBackgroundImageUrl,
+      indexerAvatarUrl, isCacheSettled, cached, resolved]);
 
-  const debugText = [
-    `[Profile] selected: ${imageScheme}`,
-    `1st useProfile.profileImage: ${indexerProfileImageUrl ? '✓ ' + indexerProfileImageUrl : '(none)'}`,
-    `1st useProfile.backgroundImage: ${indexerBackgroundImageUrl ? '✓ ' + indexerBackgroundImageUrl : '(none)'}`,
-    `2nd erc725.profileImage: ${!isCacheSettled ? '(pending...)' : cached?.profileImageUrl ? '✓ ' + cached.profileImageUrl : '(null)'}`,
-    `2nd erc725.backgroundImage: ${!isCacheSettled ? '(pending...)' : cached?.backgroundImageUrl ? '✓ ' + cached.backgroundImageUrl : '(null)'}`,
-    `3rd useProfile.avatar: ${indexerAvatarUrl ? '✓ ' + indexerAvatarUrl : '(none)'}`,
-    `final profileImage: ${resolvedProfileImageUrl ?? '(null)'}`,
-    `final backgroundImage: ${resolvedBackgroundImageUrl ?? '(null)'}`,
-  ].join('\n');
+  if (process.env.NODE_ENV === 'development') {
+    console.debug('[ProfilePopup]', key, {
+      indexer: { profileImage: indexerProfileImageUrl, backgroundImage: indexerBackgroundImageUrl, avatar: indexerAvatarUrl },
+      erc725: cached,
+      scheme: imageScheme,
+    });
+  }
 
   const stats = [
     { label: 'Following', value: String(lsp26.followingCount || '-') },
@@ -200,7 +225,6 @@ function ProfilePopupContent({
   ];
 
   const links: PopupLink[] = (profile?.links ?? []).map((l: any) => ({ title: l.title, url: l.url }));
-  const name = profile?.name || initialName || 'Unknown';
 
   return (
     <Popup
@@ -208,8 +232,8 @@ function ProfilePopupContent({
       image={{ url: isStillLoading ? null : resolvedProfileImageUrl, scheme: imageScheme }}
       backgroundImage={resolvedBackgroundImageUrl ?? undefined}
       useBannerLayout={true}
-      name={name}
-      isLoading={false}
+      name={profile?.name || initialName || undefined}
+      isLoading={isLoading}
       subLabel={address}
       description={profile?.description ?? undefined}
       tags={profile?.tags ?? undefined}
@@ -217,7 +241,7 @@ function ProfilePopupContent({
       links={links}
       externalUrl={{ label: 'Profile', url: `https://universaleverything.io/${address}` }}
       onView={onView ? () => { onView(address); onClose(); } : undefined}
-      debugText={debugText}
+      debugSteps={debugSteps}
     />
   );
 }
@@ -352,28 +376,27 @@ export function SocialGraph({ address, active = true, onViewMode }: SocialGraphP
 
   return (
     <div style={styles.card}>
-      <h3 style={styles.title}>🤝 Social Graph</h3>
-
-      {showPlaceholder && <p style={styles.empty}>🔌</p>}
+      {showPlaceholder && <p style={styles.empty}>No profile connected</p>}
 
       {targetAddress && (
         <div className="content-reveal" style={styles.cardBody}>
-          <div style={styles.tabs}>
-            <button onClick={() => setActiveTab('following')} style={{ ...styles.tab, ...(activeTab === 'following' ? styles.tabActive : {}) }}>
-              <span style={styles.tabCount}>{followingCount || 0}</span> Following
-            </button>
-            <button onClick={() => setActiveTab('followers')} style={{ ...styles.tab, ...(activeTab === 'followers' ? styles.tabActive : {}) }}>
-              <span style={styles.tabCount}>{followerCount || 0}</span> Followers
-            </button>
+          <div style={styles.toolbar}>
+            <div style={styles.segGroup}>
+              <button onClick={() => setActiveTab('following')} style={{ ...styles.seg, ...(activeTab === 'following' ? styles.segActive : {}) }}>
+                <span style={styles.tabCount}>{followingCount || 0}</span> following
+              </button>
+              <button onClick={() => setActiveTab('followers')} style={{ ...styles.seg, ...(activeTab === 'followers' ? styles.segActive : {}) }}>
+                <span style={styles.tabCount}>{followerCount || 0}</span> followers
+              </button>
+            </div>
+            <input
+              type="text"
+              placeholder="Search"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              style={styles.searchInput}
+            />
           </div>
-
-          <input
-            type="text"
-            placeholder="🔍 Search..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            style={styles.searchInput}
-          />
 
           {/* 各タブのリスト */}
           <div style={styles.listArea}>
@@ -415,10 +438,8 @@ export function SocialGraph({ address, active = true, onViewMode }: SocialGraphP
 
 const styles: { [key: string]: React.CSSProperties } = {
   card: {
-    padding: 'var(--card-padding)',
-    background: 'var(--color-surface-card)',
-    borderRadius: 'var(--radius-2xl)',
-    boxShadow: 'var(--shadow-card)',
+    padding: '8px 16px 0',
+    background: 'transparent',
     flex: 1,
     display: 'flex',
     flexDirection: 'column',
@@ -442,51 +463,55 @@ const styles: { [key: string]: React.CSSProperties } = {
     color: 'var(--color-text-primary)',
     flexShrink: 0,
   },
-  tabs: {
-    display: 'flex',
-    gap: 'var(--space-2)',
-    marginBottom: 'var(--space-2)',
-    flexShrink: 0,
-  },
-  tab: {
-    flex: 1,
-    padding: '10px 12px',
-    border: 'none',
-    borderRadius: 'var(--radius-lg)',
-    background: 'var(--color-surface-tab-inactive)',
-    color: 'var(--color-text-muted)',
-    fontSize: 'var(--text-md)',
-    fontWeight: '600',
-    cursor: 'pointer',
-    transition: `all var(--transition-slow)`,
-    minHeight: 'var(--tab-height)',
+  toolbar: {
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 'var(--space-1)',
-  },
-  tabActive: {
-    background: 'var(--gradient-brand)',
-    color: 'var(--color-text-white)',
-  },
-  tabCount: { fontWeight: '800' },
-  searchInput: {
-    width: '100%',
-    padding: '8px 12px',
-    marginBottom: 'var(--space-2)',
-    border: `1px solid var(--color-border-default)`,
-    borderRadius: 'var(--radius-md)',
-    fontSize: '16px',
-    outline: 'none',
-    boxSizing: 'border-box' as const,
+    gap: 10,
+    marginBottom: 8,
     flexShrink: 0,
+    minHeight: 28,
+  },
+  segGroup: {
+    display: 'flex',
+    gap: 12,
+    flex: '0 0 196px',
+    minWidth: 196,
+  },
+  seg: {
+    flex: '0 0 auto',
+    padding: '0 0 2px',
+    border: 'none',
+    borderBottom: '2px solid transparent',
+    background: 'transparent',
+    color: 'var(--mute)',
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+  },
+  segActive: {
+    color: 'var(--ink)',
+    borderBottomColor: 'var(--accent)',
+  },
+  tabCount: { fontWeight: 600, fontVariantNumeric: 'tabular-nums' },
+  searchInput: {
+    flex: 1,
+    minWidth: 0,
+    padding: '4px 0',
+    border: 'none',
+    borderBottom: '1px solid var(--line)',
+    borderRadius: 0,
+    fontSize: 13,
+    outline: 'none',
+    background: 'transparent',
+    color: 'var(--ink)',
   },
   list: {
     flex: 1,
     display: 'flex',
     flexDirection: 'column',
     gap: 'var(--list-item-gap)',
-    overflowY: 'scroll',
+    overflowY: 'auto',
     minHeight: 'var(--list-min-height)',
   },
   // item の background / transition は .list-item CSS クラスで管理
@@ -531,8 +556,8 @@ const styles: { [key: string]: React.CSSProperties } = {
     lineHeight: 1.3,
   },
   itemAddress: {
-    fontSize: 'var(--text-sm)',
-    color: 'var(--color-text-muted)',
+    fontSize: 'var(--text-xs)',
+    color: 'var(--color-text-faint)',
     fontFamily: 'monospace',
     overflow: 'hidden',
     textOverflow: 'ellipsis',

@@ -5,7 +5,8 @@ import { ProfileCard } from '@/components/ProfileCard';
 import { SocialGraph } from '@/components/SocialGraph';
 import { AssetList } from '@/components/AssetList';
 import { ActivityList } from '@/components/ActivityList';
-import { useState, Suspense, useCallback, useEffect, useRef } from 'react';
+import { ProfileSearch } from '@/components/ProfileSearch';
+import { useState, Suspense, useCallback, useEffect } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 
 type TabType = 'assets' | 'social' | 'activity';
@@ -48,29 +49,23 @@ function ViewerInner() {
 
   return (
     <div style={styles.container}>
-      <header style={styles.header}>
-        <h1 style={styles.title}>
-          <span style={styles.titleEmoji}>🆙</span>
-          <span style={styles.titleText}>Viewer</span>
-        </h1>
-      </header>
-
       <div style={styles.content}>
         <ProfileCard
           address={activeAddress}
           isViewMode={isViewMode}
           onExitViewMode={handleExitViewMode}
-          onToggleSearch={isViewMode ? undefined : () => setShowSearch(prev => !prev)}
+          onToggleSearch={() => setShowSearch(prev => !prev)}
         />
 
         {showSearch && (
-          <DynamicProfileSearch
-            onSelect={handleSelectAddress}
-            onCancel={() => setShowSearch(false)}
-          />
+          <div style={styles.searchSlot}>
+            <ProfileSearch
+              onSelect={handleSelectAddress}
+              onCancel={() => setShowSearch(false)}
+            />
+          </div>
         )}
 
-        {/* ── カテゴリカード（タブ選択） ── */}
         <div style={styles.tabs}>
           {(['assets', 'social', 'activity'] as const).map((tab) => (
             <button
@@ -81,32 +76,16 @@ function ViewerInner() {
                 ...(activeTab === tab ? styles.tabActive : {}),
               }}
             >
-              {tab === 'assets'   ? '💎 Assets'
-               : tab === 'social' ? '🤝 Social'
-               : '⚡ Activity'}
+              {tab === 'assets' ? 'Assets' : tab === 'social' ? 'Social' : 'Activity'}
             </button>
           ))}
         </div>
 
-        {/* ── コンテンツカード（常時マウント）──────────────────
-            display:none を廃止。全タブを常時レイアウトに存在させることで：
-            ・virtualizer が常に正しい高さを持つコンテナを参照できる
-            ・タブ切り替え時の「高さゼロ → 一気に伸びる」を解消
-            ・スクロール位置が DOM 破棄なしで自然に保持される
-
-            非アクティブタブは position:absolute + opacity:0 + pointer-events:none
-            で視覚的に隠す。activeタブだけが position:relative でスペースを占有。
-
-            各コンポーネントは active prop で「初回アクティブ化まで
-            フェッチしない」を制御する（hasBeenActive パターン）。     */}
         <div style={styles.tabPanel}>
           {(['assets', 'social', 'activity'] as const).map(tab => (
             <div
               key={tab}
-              style={{
-                ...styles.tabWrapper,
-                ...(activeTab === tab ? styles.tabWrapperActive : styles.tabWrapperInactive),
-              }}
+              style={activeTab === tab ? styles.tabWrapperActive : styles.tabWrapperInactive}
             >
               {tab === 'assets'   && <AssetList    address={activeAddress} active={activeTab === 'assets'}   />}
               {tab === 'social'   && <SocialGraph  address={activeAddress} active={activeTab === 'social'} onViewMode={(addr) => handleSelectAddress(addr as `0x${string}`)} />}
@@ -117,16 +96,16 @@ function ViewerInner() {
       </div>
 
       <footer style={styles.footer}>
-        <span style={styles.footerText}>Made with </span>
-        <span>❤️</span>
-        <span style={styles.footerText}> by </span>
+        <span style={styles.footerText}>Made with</span>
+        <span style={styles.footerEmoji}>❤️</span>
+        <span style={styles.footerText}>by</span>
         <a
           href="https://profile.link/🆙chan@bcA4"
           target="_blank"
           rel="noopener noreferrer"
           style={styles.footerLink}
         >
-          <span style={styles.titleEmoji}>🆙</span>chan
+          <span style={styles.footerEmoji}>🆙</span>chan
         </a>
         <span style={styles.footerSeparator}>|</span>
         <a
@@ -140,29 +119,6 @@ function ViewerInner() {
       </footer>
     </div>
   );
-}
-
-// ── Lazy-loaded ProfileSearch ──────────────────────────────
-// useRef で import 結果を保持し、再マウントを防ぐ（入力フォーカス維持）
-
-function DynamicProfileSearch(props: {
-  onSelect: (addr: `0x${string}`) => void;
-  onCancel: () => void;
-}) {
-  const ref = useRef<{ default?: any; ProfileSearch?: any } | null>(null);
-  const [, setTick] = useState(0);
-
-  useEffect(() => {
-    if (ref.current) return;
-    import('@/components/ProfileSearch').then(m => {
-      ref.current = m;
-      setTick(t => t + 1);
-    });
-  }, []);
-
-  const ProfileSearch = ref.current?.ProfileSearch;
-  if (!ProfileSearch) return null;
-  return <ProfileSearch {...props} />;
 }
 
 function ViewerContent() {
@@ -192,51 +148,17 @@ export default function Page() {
 //            virtualizer が常に正しいコンテナ高さを認識し、タブ遷移の伸縮を解消。
 
 const styles: { [key: string]: React.CSSProperties } = {
-  // ── ページ全体 ──
-  // min-height: 100dvh でモバイルのアドレスバー収縮に追従。
-  // flex column でヘッダー・コンテンツ・フッターを縦積みし、
-  // コンテンツが残余スペースを占有する。
   container: {
-    height: '100dvh',          // minHeight → height に変更。
-    overflow: 'hidden',        // container 自体がビューポートを超えない。
+    height: '100dvh',
+    overflow: 'hidden',
     width: '100%',
     minWidth: 'var(--min-width-app)',
-    padding: 'var(--space-3)',
-    paddingBottom: 'var(--space-2)',
     fontFamily: 'inherit',
-    background: 'var(--gradient-brand)',
+    background: 'radial-gradient(120% 42% at 50% 0%, rgba(120, 164, 230, 0.22), transparent 58%), var(--paper)',
     boxSizing: 'border-box',
     display: 'flex',
     flexDirection: 'column',
   },
-  // ── ヘッダー ──
-  // タイトルは小さく抑えてコンテンツ優先
-  header: {
-    textAlign: 'center',
-    flexShrink: 0,
-    marginBottom: 'var(--space-1)',
-  },
-  title: {
-    margin: '0',
-    fontSize: 'clamp(1.2rem, 4vw, 1.6rem)',  // 従来より小さく
-    fontWeight: '800',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 'var(--space-2)',
-  },
-  titleEmoji: {
-    fontFamily: '"Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif',
-  },
-  titleText: {
-    background: 'var(--gradient-title-text)',
-    WebkitBackgroundClip: 'text',
-    WebkitTextFillColor: 'transparent',
-    backgroundClip: 'text',
-    letterSpacing: '-0.02em',
-  },
-  // ── コンテンツ列 ──
-  // flex:1 で container の余白を占有し、内部カードを縦に並べる
   content: {
     maxWidth: 'var(--content-max-width)',
     width: '100%',
@@ -244,42 +166,33 @@ const styles: { [key: string]: React.CSSProperties } = {
     flex: 1,
     display: 'flex',
     flexDirection: 'column',
-    gap: 'var(--space-1)',
     minHeight: 0,
   },
-  // ── カテゴリカード（タブバー本体） ──
+  searchSlot: {
+    padding: '0 16px',
+    flexShrink: 0,
+  },
   tabs: {
     display: 'flex',
-    gap: 'var(--space-1)',
-    background: 'var(--color-surface-card)',
-    padding: '4px',
-    borderRadius: 'var(--radius-xl)',
+    padding: '0 8px',
+    borderBottom: '1px solid var(--line)',
     flexShrink: 0,
   },
   tab: {
     flex: 1,
-    padding: '7px 6px',
+    padding: '8px 0 6px',
     background: 'transparent',
     border: 'none',
-    borderRadius: 'var(--radius-lg)',
-    color: 'var(--color-text-muted)',
-    fontSize: 'var(--text-md)',
+    borderBottom: '2px solid transparent',
+    color: 'var(--mute)',
+    fontSize: '13px',
     fontWeight: '600',
     cursor: 'pointer',
-    transition: `all var(--transition-normal)`,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 'var(--space-1)',
-    minHeight: '36px',              // 旧 42px → 36px でモバイル省スペース
   },
   tabActive: {
-    background: 'var(--gradient-brand)',
-    color: 'var(--color-text-white)',
+    color: 'var(--ink)',
+    borderBottomColor: 'var(--accent)',
   },
-  // ── コンテンツカード領域 ──
-  // flex:1 + min-height:0 で content の残余スペースをすべて占有。
-  // position:relative で絶対配置の非アクティブタブを受ける。
   tabPanel: {
     flex: 1,
     minHeight: 0,
@@ -287,7 +200,6 @@ const styles: { [key: string]: React.CSSProperties } = {
     display: 'flex',
     flexDirection: 'column',
   },
-  // アクティブタブ: 通常フロー、height:100% で tabPanel を埋める
   tabWrapperActive: {
     position: 'relative',
     height: '100%',
@@ -296,11 +208,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     opacity: 1,
     pointerEvents: 'auto' as const,
     zIndex: 1,
-    transition: 'opacity 0.15s ease',
   },
-  // 非アクティブタブ: 絶対配置で視覚的に隠すが DOM には残す
-  // opacity:0 + pointer-events:none で完全に非表示
-  // virtualizer は DOM に存在するため高さを正しく認識し続ける
   tabWrapperInactive: {
     position: 'absolute' as const,
     inset: 0,
@@ -309,49 +217,51 @@ const styles: { [key: string]: React.CSSProperties } = {
     opacity: 0,
     pointerEvents: 'none' as const,
     zIndex: 0,
-    transition: 'opacity 0.15s ease',
   },
-  // Suspense fallback
   suspenseFallback: {
     height: '100dvh',
     overflow: 'hidden',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    background: 'var(--gradient-brand)',
-    color: 'var(--color-text-white)',
+    background: 'var(--paper)',
+    color: 'var(--ink)',
   },
-  // ── フッター ──
   footer: {
     flexShrink: 0,
-    marginTop: 'var(--space-1)',
+    padding: '8px 16px 10px',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 'var(--space-1)',
+    gap: '6px',
     flexWrap: 'wrap',
+    borderTop: '1px solid var(--line)',
   },
   footerText: {
-    fontSize: 'var(--text-base)',
-    color: 'rgba(255, 255, 255, 0.9)',
+    fontSize: '13px',
+    color: 'var(--mute)',
+  },
+  footerEmoji: {
+    fontFamily: '"Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif',
+    fontSize: '15px',
+    lineHeight: 1,
   },
   footerLink: {
     display: 'inline-flex',
     alignItems: 'center',
-    gap: 'var(--space-1)',
-    color: 'rgba(255, 255, 255, 0.95)',
+    gap: '3px',
+    color: 'var(--accent)',
     textDecoration: 'none',
-    fontSize: 'var(--text-base)',
-    fontWeight: '600',
-    transition: `opacity var(--transition-normal)`,
+    fontSize: '13px',
+    fontWeight: '650',
   },
   footerSeparator: {
-    color: 'rgba(255, 255, 255, 0.5)',
-    fontSize: 'var(--text-base)',
+    color: '#9aa8bc',
+    fontSize: '13px',
   },
   footerX: {
     fontSize: 'var(--text-md)',
     fontFamily: 'inherit',
-    color: 'rgba(255, 255, 255, 0.9)',
+    color: 'var(--accent)',
   },
 };

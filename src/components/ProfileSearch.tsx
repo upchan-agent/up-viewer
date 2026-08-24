@@ -1,8 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-
-const ENVIO_MAINNET_URL = 'https://envio.lukso-mainnet.universal.tech/v1/graphql';
+import { envioQuery } from '@/lib/envio';
 
 // ─── ErrorImage（エラー時のみフォールバック表示）──────────
 
@@ -66,7 +65,12 @@ export function ProfileSearch({ onSelect, onCancel }: ProfileSearchProps) {
   const [resultsTick, setResultsTick] = useState(0);
   const loadingRef = useRef(false);
   const [showDropdown, setShowDropdown] = useState(false);
+  // Unified debounce (300ms) for all query types
+  const DEBOUNCE_MS = 300;
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Abort in-flight search when a newer one starts (prevents stale results
+  // overwriting fresh ones regardless of response order)
+  const abortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Force re-render of dropdown area only (input stays stable)
@@ -80,22 +84,25 @@ export function ProfileSearch({ onSelect, onCancel }: ProfileSearchProps) {
       return;
     }
 
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     loadingRef.current = true;
     try {
-      const res = await fetch(ENVIO_MAINNET_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: GQL_QUERY, variables: { id: searchQuery.toLowerCase() } }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
-      resultsRef.current = json.data?.search_profiles ?? [];
+      const data = await envioQuery<{ search_profiles: Profile[] }>(
+        GQL_QUERY,
+        { id: searchQuery.toLowerCase() },
+        controller.signal,
+      );
+      if (controller.signal.aborted) return;
+      resultsRef.current = data?.search_profiles ?? [];
       setShowDropdown(resultsRef.current.length > 0);
-    } catch {
+    } catch (e: any) {
+      if (controller.signal.aborted || e?.name === 'AbortError') return;
       resultsRef.current = [];
       setShowDropdown(false);
     } finally {
-      loadingRef.current = false;
+      if (!controller.signal.aborted) loadingRef.current = false;
     }
     tick();
   }, [tick]);
@@ -108,21 +115,13 @@ export function ProfileSearch({ onSelect, onCancel }: ProfileSearchProps) {
       if (debounceRef.current) clearTimeout(debounceRef.current);
 
       if (val.length < 3) {
+        abortRef.current?.abort();
         resultsRef.current = [];
         setShowDropdown(false);
         tick();
         return;
       }
-
-      const looksLikeAddress = /^0x[0-9a-f]{5,}/i.test(val);
-
-      if (looksLikeAddress) {
-        debounceRef.current = setTimeout(() => doSearch(val), 400);
-      } else if (val.length === 3) {
-        doSearch(val);
-      } else {
-        debounceRef.current = setTimeout(() => doSearch(val), 800);
-      }
+      debounceRef.current = setTimeout(() => doSearch(val), DEBOUNCE_MS);
     },
     [doSearch, tick]
   );
@@ -154,7 +153,10 @@ export function ProfileSearch({ onSelect, onCancel }: ProfileSearchProps) {
   }, []);
 
   useEffect(() => {
-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      abortRef.current?.abort();
+    };
   }, []);
 
   // Stable input ref + dropdown state
@@ -169,7 +171,7 @@ export function ProfileSearch({ onSelect, onCancel }: ProfileSearchProps) {
           value={query}
           onChange={handleInputChange}
           onKeyDown={handleKeyDown}
-          placeholder="🔍 Enter 3 chars or paste address..."
+          placeholder="Enter 3 chars or paste address..."
           style={styles.input}
         />
         <button onClick={onCancel} style={styles.cancelButton}>
@@ -186,10 +188,10 @@ export function ProfileSearch({ onSelect, onCancel }: ProfileSearchProps) {
                   <ErrorImage
                     src={r.profileImages[0].src}
                     style={styles.resultAvatarImg}
-                    fallback={<span style={styles.resultAvatarFallback}>👤</span>}
+                    fallback={<span style={styles.resultAvatarFallback}>{(r.name || r.fullName || '?').charAt(0)}</span>}
                   />
                 ) : (
-                  <span style={styles.resultAvatarFallback}>👤</span>
+                  <span style={styles.resultAvatarFallback}>{(r.name || r.fullName || '?').charAt(0)}</span>
                 )}
               </div>
               <div style={styles.resultInfo}>

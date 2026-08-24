@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, memo } from 'react';
 import { ErrorImage } from '@/components/ErrorImage';
+import { TRACE_GLYPH, type TraceStep } from '@/lib/debug-trace';
 
 // ─── Props ────────────────────────────────────────────────────
 //
@@ -31,6 +32,9 @@ import { ErrorImage } from '@/components/ErrorImage';
 //
 // debugText: raw string rendered in a collapsible monospace panel.
 //   Pass undefined to hide the debug section entirely.
+// debugSteps: structured trace (preferred) — rendered as a readable
+//   step list with status glyphs. Takes precedence over debugText.
+//   Pass neither to hide the debug section.
 
 export interface PopupImage {
   url: string | null;
@@ -64,7 +68,7 @@ export interface PopupProps {
   image?: PopupImage;
   backgroundImage?: string;       // banner background image
   useBannerLayout?: boolean;      // always use banner+avatar layout (Social profiles)
-  placeholderEmoji?: string;      // shown when no image — defaults to '🖼️'
+  placeholderInitials?: string;   // shown when no image
 
   // Header
   name?: string;
@@ -91,7 +95,8 @@ export interface PopupProps {
 
   // Debug
   debugText?: string;
-}
+  debugSteps?: TraceStep[];
+  }
 
 // ─── Component ────────────────────────────────────────────────
 
@@ -100,7 +105,7 @@ export const Popup = memo(function Popup({
   image,
   backgroundImage,
   useBannerLayout = false,
-  placeholderEmoji = '🖼️',
+  placeholderInitials,
   name,
   isLoading,
   subLabel,
@@ -111,8 +116,9 @@ export const Popup = memo(function Popup({
   attributes,
   externalUrl,
   onView,
-  viewLabel = '👀 View',
+  viewLabel = 'View',
   debugText,
+  debugSteps,
 }: PopupProps) {
   const [debugOpen, setDebugOpen] = useState(false);
 
@@ -152,10 +158,6 @@ export const Popup = memo(function Popup({
         */}
         {useBannerLayout ? (
           <div style={styles.bannerWrapper}>
-            {/* Banner background: img tag (not CSS background-image) so we can
-                fade in after load and avoid the "wrong crop on first open" bug
-                caused by browser applying default background-position before
-                the image bytes arrive. No image → grey placeholder. */}
             <div style={{
               ...styles.bannerBackground,
               background: backgroundImage ? 'transparent' : 'var(--color-state-resolving)',
@@ -177,23 +179,23 @@ export const Popup = memo(function Popup({
           </div>
         ) : (
           <div style={styles.imageWrapper}>
-            {isLoading
-              ? <span style={styles.loadingText}>⏳ Loading...</span>
-              : image?.url
-                ? <ErrorImage src={image.url} style={styles.image} fallback={<span style={styles.placeholderEmoji}>{placeholderEmoji}</span>} />
-                : <span style={styles.placeholderEmoji}>{placeholderEmoji}</span>}
+            {image?.url
+              ? <ErrorImage src={image.url} style={styles.image} fallback={<span style={styles.placeholderMark}>{(placeholderInitials || name || '·').charAt(0)}</span>} />
+              : isLoading
+                ? <div className="skim" style={styles.imageSkim} />
+                : <span style={styles.placeholderMark}>{(placeholderInitials || name || '·').charAt(0)}</span>}
           </div>
         )}
 
-        {/* ── Header ──────────────────────────────────────── */}
         <div style={{ ...styles.header, ...(useBannerLayout ? { marginTop: '36px' } : {}) }}>
-          {isLoading
-            ? <div className="skim" style={{ width: '120px', height: '22px', borderRadius: 'var(--radius-xs)' }} />
-            : name && <h3 style={styles.name}>{name}</h3>}
+          {name
+            ? <h3 style={styles.name}>{name}</h3>
+            : isLoading
+              ? <div className="skim" style={styles.nameSkim} />
+              : null}
           {subLabel && <span style={styles.subLabel}>{subLabel}</span>}
         </div>
 
-        {/* ── View button ─────────────────────────────────── */}
         {onView && (
           <div style={styles.viewRow}>
             <button
@@ -205,19 +207,6 @@ export const Popup = memo(function Popup({
           </div>
         )}
 
-        {/* ── Tags ────────────────────────────────────────── */}
-        {!!(tags?.length) && (
-          <div style={styles.tagsRow}>
-            {tags.map((tag, i) => (
-              <span key={i} style={styles.tag}>{tag}</span>
-            ))}
-          </div>
-        )}
-
-        {/* ── Description ─────────────────────────────────── */}
-        {description && <p style={styles.description}>{description}</p>}
-
-        {/* ── Stats grid ──────────────────────────────────── */}
         {!!(stats?.length) && (
           <div style={styles.statsGrid}>
             {stats.map((stat, i) => (
@@ -229,7 +218,6 @@ export const Popup = memo(function Popup({
           </div>
         )}
 
-        {/* ── External URL ────────────────────────────────── */}
         {externalUrl && (
           <div style={{ marginBottom: 'var(--space-1)' }}>
             <span style={styles.statLabel}>{externalUrl.label}</span>
@@ -245,6 +233,20 @@ export const Popup = memo(function Popup({
             </span>
           </div>
         )}
+
+        {isLoading && !description && (
+          <div className="skim" style={styles.descSkim} />
+        )}
+
+        {!!(tags?.length) && (
+          <div style={styles.tagsRow}>
+            {tags.map((tag, i) => (
+              <span key={i} style={styles.tag}>{tag}</span>
+            ))}
+          </div>
+        )}
+
+        {description && <p style={styles.description}>{description}</p>}
 
         {/* ── Links ───────────────────────────────────────── */}
         {!!(links?.length) && (
@@ -282,7 +284,7 @@ export const Popup = memo(function Popup({
         )}
 
         {/* ── Debug ───────────────────────────────────────── */}
-        {debugText !== undefined && (
+        {(debugSteps !== undefined || debugText !== undefined) && (
           <div style={debugStyles.container}>
             <button
               style={debugStyles.toggle}
@@ -290,7 +292,25 @@ export const Popup = memo(function Popup({
             >
               🔍 Debug: Image Resolution {debugOpen ? '▲' : '▼'}
             </button>
-            {debugOpen && (
+            {debugOpen && debugSteps !== undefined && (
+              <div style={debugStyles.content}>
+                {debugSteps.map((step, i) => (
+                  <div key={i} style={debugStyles.stepRow}>
+                    <span style={debugStyles.stepGlyph} data-status={step.status}>
+                      {TRACE_GLYPH[step.status]}
+                    </span>
+                    <span style={debugStyles.stepLabel}>{step.label}</span>
+                    {step.detail && (
+                      <span style={debugStyles.stepDetail}>
+                        {' '}
+                        {step.detail}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+            {debugOpen && debugSteps === undefined && debugText !== undefined && (
               <div style={debugStyles.content}>{debugText}</div>
             )}
           </div>
@@ -340,8 +360,11 @@ const styles: Record<string, React.CSSProperties> = {
     background: 'var(--color-state-resolving)', flexShrink: 0,
   },
   image: { maxWidth: '100%', maxHeight: '160px', objectFit: 'contain' },
+  imageSkim: { width: '100%', height: '100%' },
+  nameSkim: { width: 120, height: 22, borderRadius: 'var(--radius-xs)' },
+  descSkim: { width: '100%', height: 40, borderRadius: 'var(--radius-sm)', marginBottom: 'var(--space-1)', flexShrink: 0 },
   loadingText: { color: 'var(--color-text-faint)', fontSize: 'var(--text-md)' },
-  placeholderEmoji: { color: 'var(--color-text-faint)', fontSize: '2rem' },
+  placeholderMark: { color: 'var(--accent)', fontSize: '1.4rem', fontWeight: 700 },
 
   // バナー＋アバターレイアウト（Social）
   bannerWrapper: {
@@ -374,7 +397,7 @@ const styles: Record<string, React.CSSProperties> = {
   bannerAvatarPlaceholder: { width: '100%', height: '100%', borderRadius: 'var(--radius-full)', background: 'var(--color-state-resolving)', border: '2px solid var(--color-state-empty)' },
 
   // ヘッダー
-  header: { marginBottom: 'var(--space-1)', marginTop: '0' },
+  header: { marginBottom: 'var(--space-1)', marginTop: '0', minHeight: 36 },
   name: {
     fontSize: 'var(--text-xl)', fontWeight: '700',
     color: 'var(--color-text-primary)', margin: 0, lineHeight: 1.3,
@@ -423,8 +446,8 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '4px 12px',
     border: 'none',
     borderRadius: 'var(--radius-md)',
-    background: 'var(--gradient-brand)',
-    color: 'var(--color-text-white)',
+    background: 'transparent',
+    color: 'var(--accent)',
     fontSize: 'var(--text-sm)',
     fontWeight: '600',
     cursor: 'pointer',
@@ -477,4 +500,11 @@ const debugStyles: Record<string, React.CSSProperties> = {
     lineHeight: '1.4', color: 'var(--color-text-debug-val)',
     fontFamily: 'monospace', fontSize: '0.58rem',
   },
+  stepRow: {
+    display: 'flex', alignItems: 'baseline', gap: '4px',
+    padding: '1px 0',
+  },
+  stepGlyph: { flexShrink: 0, width: '1.2em' },
+  stepLabel: { flexShrink: 0, fontWeight: 600 },
+  stepDetail: { color: 'var(--color-text-faint)', wordBreak: 'break-all' },
 };

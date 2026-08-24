@@ -117,17 +117,20 @@ export function UpProvider({ children }: UpProviderProps) {
           // Polling fallback: Grid OFF→ON may not fire events,
           // so actively re-request accounts via RPC every 10 seconds.
           // 10s is sufficient for account detection; 2s caused unnecessary CPU load on mobile.
+          // Paused while the page is hidden to save battery/data.
+          let lastRpcAccounts: string[] | null = null;
           pollInterval = setInterval(async () => {
+            if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
             try {
               const rpcAccounts = await gridProvider.request({ method: 'eth_accounts' }) as string[];
               const currentAccounts = (rpcAccounts || []) as `0x${string}`[];
               const currentContext = (gridProvider.contextAccounts || []) as `0x${string}`[];
-              
+
               // If context accounts appear and we don't have initial yet, save it
               if (currentContext.length > 0) {
                 setInitialContext(currentContext);
               }
-              
+
               setAccounts(prev =>
                 prev.length !== currentAccounts.length || prev[0] !== currentAccounts[0]
                   ? currentAccounts : prev
@@ -136,10 +139,20 @@ export function UpProvider({ children }: UpProviderProps) {
                 prev.length !== currentContext.length || prev[0] !== currentContext[0]
                   ? currentContext : prev
               );
+              lastRpcAccounts = currentAccounts;
             } catch {
               // Ignore polling errors
             }
           }, 10000);
+          // Re-check immediately when the tab becomes visible again
+          // (polling was paused while hidden)
+          const onVisibility = () => {
+            if (document.visibilityState === 'visible') {
+              gridProvider.request({ method: 'eth_accounts' }).catch(() => {});
+            }
+          };
+          document.addEventListener('visibilitychange', onVisibility);
+          (pollInterval as any).__visibilityHandler = onVisibility;
         } else if (luksoProvider) {
           // Standalone mode: use window.lukso (browser extension)
           setProvider(luksoProvider);
@@ -179,7 +192,11 @@ export function UpProvider({ children }: UpProviderProps) {
     initProvider();
 
     return () => {
-      if (pollInterval) clearInterval(pollInterval);
+      if (pollInterval) {
+        const handler = (pollInterval as any).__visibilityHandler;
+        if (handler) document.removeEventListener('visibilitychange', handler);
+        clearInterval(pollInterval);
+      }
     };
   }, [setInitialContext]);
 

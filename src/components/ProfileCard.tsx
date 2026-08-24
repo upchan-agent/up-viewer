@@ -3,13 +3,9 @@
 import { useUpProvider } from '@/lib/up-provider';
 import { useProfile } from '@lsp-indexer/react';
 import { toGatewayUrl } from '@/lib/utils';
+import { LUKSO_EXPLORER_URL } from '@/lib/constants';
 import { useResolvedProfileImage } from '@/lib/profile-image-cache';
-import { useState, useEffect, useRef } from 'react';
 import { ErrorImage } from '@/components/ErrorImage';
-
-// ── document.createElement('style') は globals.css に集約済み ──
-// shimmer / pulse keyframes は globals.css で定義。
-// .skim クラスをスケルトン要素に付与する。
 
 export function ProfileCard({
   address: propAddress,
@@ -38,7 +34,6 @@ export function ProfileCard({
     address: activeAddress || '',
   });
 
-  // ── 画像解決（Priority: indexer → erc725 → avatar）──
   const indexerProfileUrl = toGatewayUrl(profile?.profileImage?.[0]?.url ?? '') ?? undefined;
   const indexerBgUrl      = toGatewayUrl(profile?.backgroundImage?.[0]?.url ?? '') ?? undefined;
   const indexerAvatarUrl  = toGatewayUrl(profile?.avatar?.[0]?.url ?? '') ?? undefined;
@@ -62,425 +57,247 @@ export function ProfileCard({
     }
   };
 
-  const hasProfile = activeAddress && !isProfileLoading && profile;
-  const name       = profile?.name || 'Unknown';
+  const hasProfile = !!(activeAddress && !isProfileLoading && profile);
+  const name       = profile?.name || (activeAddress ? 'Unknown' : 'No profile connected');
   const initials   = name.charAt(0).toUpperCase();
   const isLoading  = isProfileLoading || resolved === undefined;
 
+  const chipLabel = isViewMode
+    ? 'Viewing'
+    : isDetecting
+      ? null
+      : viewMode === 'wallet'
+        ? (isMiniApp ? 'Connected via Grid' : 'Connected')
+        : viewMode === 'grid'
+          ? 'Viewing via Grid'
+          : null;
+
   return (
-    <div style={styles.card}>
-      {/* 背景画像 — absolute で位置取りし、カードサイズに影響しない */}
-      {!isLoading && backgroundImageUrl && (
-        <div style={styles.bgWrapper}>
+    <div style={styles.root}>
+      <div style={styles.bannerWrap}>
+        {backgroundImageUrl ? (
           <ErrorImage
             src={backgroundImageUrl}
-            style={styles.bgImg}
+            style={styles.bannerImg}
             onLoad={(e) => { (e.target as HTMLImageElement).style.opacity = '1'; }}
           />
-        </div>
-      )}
-
-      {/* ── 接続バー ──────────────────────────────────────────
-          固定高さ（--conn-bar-height）で常にスペースを確保する。
-          コンテンツの有無でカードが伸縮しないよう height を固定。  */}
-      <div style={styles.connectionSection}>
-
-        {/* View Mode */}
-        {isViewMode && onExitViewMode && (
-          <div style={styles.viewModeRow}>
-            <span style={styles.connIcon}>👀</span>
-            <span style={styles.viewModeText}>View mode</span>
+        ) : (
+          <div style={styles.bannerFallback} />
+        )}
+        <div style={styles.bannerFade} />
+      </div>
+      <div style={styles.bannerBar}>
+          {isDetecting && !isViewMode ? (
+            <div className="skim" style={styles.chipSkim} />
+          ) : chipLabel ? (
+            <span style={styles.chip}>{chipLabel}</span>
+          ) : (
+            <span />
+          )}
+          <div style={styles.bannerActions}>
+            {viewMode === 'wallet' && !isMiniApp && !isViewMode && (
+              <button onClick={handleSwitch} style={styles.chipButton}>Switch</button>
+            )}
+            {onToggleSearch && (
+              <button onClick={onToggleSearch} style={styles.chipButton} aria-label="Search UP">
+                Search
+              </button>
+            )}
+            {isViewMode && onExitViewMode && (
+              <button onClick={onExitViewMode} style={styles.chipButton} aria-label="Exit view mode">
+                Exit
+              </button>
+            )}
           </div>
-        )}
-        {isViewMode && onExitViewMode && (
-          <button
-            onClick={onExitViewMode}
-            style={styles.exitButton}
-            aria-label="Exit view mode"
-          >
-            Exit
-          </button>
-        )}
-
-        {/* 通常状態（View Mode 時は非表示）*/}
-        {!isViewMode && (
-          <>
-            {isDetecting && (
-              <div style={styles.connRow}>
-                {/* .skim クラスで shimmer アニメーション（globals.css 定義）*/}
-                <div className="skim" style={styles.skeletonIcon} />
-                <div className="skim" style={styles.skeletonText} />
-              </div>
-            )}
-
-            {viewMode === 'wallet' && (
-              <div style={styles.connRow}>
-                <span style={styles.connIcon}>🟢</span>
-                <span style={styles.connectedText}>
-                  {isMiniApp ? 'Connected via Grid' : 'Connected'}
-                </span>
-                {!isMiniApp && (
-                  <button onClick={handleSwitch} style={styles.switchButton}>
-                    Switch
-                  </button>
-                )}
-              </div>
-            )}
-
-            {viewMode === 'grid' && (
-              <div style={styles.connRow}>
-                <span style={styles.connIcon}>👀</span>
-                <span style={styles.viewingText}>Viewing via Grid</span>
-              </div>
-            )}
-
-            {!isDetecting && viewMode === 'none' && isMiniApp === false && (
-              <div style={styles.connRow}>
-                <span style={styles.connIcon}>🔌</span>
-                <span style={styles.disconnectedText}>Not connected</span>
-                <button
-                  onClick={connect}
-                  disabled={isConnecting}
-                  style={{
-                    ...styles.connectButton,
-                    ...(isConnecting ? styles.connectButtonDisabled : {}),
-                  }}
-                >
-                  {isConnecting ? 'Connecting...' : 'Connect'}
-                </button>
-              </div>
-            )}
-          </>
-        )}
-
-        {/* 🔍 検索ボタン — 常時表示 */}
-        {onToggleSearch && (
-          <button
-            onClick={onToggleSearch}
-            style={styles.searchButton}
-            aria-label="Search UP"
-          >
-            🔍
-          </button>
-        )}
       </div>
 
-      {/* ── プロフィールセクション ──────────────────────────────
-          height を固定して、ロード中・未接続・接続済みすべての
-          状態でカード高さが変わらないようにする。
-          placeholderSection も同じ height を持ち、overflow:hidden
-          でコンテンツがはみ出さないようにする。               */}
-      <div style={
-        hasProfile
-          ? styles.profileSection
-          : styles.placeholderSection
-      }>
-        {!activeAddress ? (
-          <>
-            <span style={styles.placeholderIcon}>👤</span>
-            <p style={styles.placeholderText}>No profile connected</p>
-          </>
-        ) : !hasProfile ? (
-          <>
-            <span style={styles.placeholderIcon}>👤</span>
-            <p style={styles.placeholderText}>Loading profile...</p>
-          </>
+      <div style={styles.identity}>
+        {isLoading && activeAddress ? (
+          <div className="skim" style={styles.avatar} />
+        ) : profileImageUrl ? (
+          <ErrorImage
+            src={profileImageUrl}
+            alt={name}
+            style={styles.avatar}
+            fallback={<div style={styles.avatarFallback}>{initials}</div>}
+          />
         ) : (
-          <>
-            {isLoading ? (
-              <div style={styles.avatarPlaceholder}>
-                <span style={styles.loadingSpinner}>⏳</span>
-              </div>
-            ) : profileImageUrl ? (
-              <ErrorImage
-                src={profileImageUrl}
-                alt={name}
-                style={styles.avatar}
-                fallback={<div style={styles.avatarPlaceholder}>{initials}</div>}
-              />
-            ) : (
-              <div style={styles.avatarPlaceholder}>{initials}</div>
-            )}
-            <div style={styles.info}>
-              <h2 style={styles.name}>{name}</h2>
-              <p style={styles.address}>{activeAddress}</p>
-            </div>
-          </>
+          <div style={styles.avatarFallback}>{activeAddress ? initials : ''}</div>
         )}
+        <div style={styles.who}>
+          {isLoading && activeAddress ? (
+            <div className="skim" style={styles.nameSkim} />
+          ) : (
+            <h1 style={styles.name}>{name}</h1>
+          )}
+          {activeAddress ? (
+            <a
+              href={`${LUKSO_EXPLORER_URL}/address/${activeAddress}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={styles.addr}
+            >
+              {activeAddress}
+            </a>
+          ) : viewMode === 'none' && isMiniApp === false ? (
+            <button
+              onClick={connect}
+              disabled={isConnecting}
+              style={styles.connect}
+            >
+              {isConnecting ? 'Connecting...' : 'Connect'}
+            </button>
+          ) : null}
+        </div>
       </div>
     </div>
   );
 }
 
-// ─── Styles ──────────────────────────────────────────────────
-// CSS 変数を参照。ハードコード値は globals.css に定義済み。
-
 const styles: { [key: string]: React.CSSProperties } = {
-  // ── カード ──
-  card: {
-    padding: 'var(--card-padding)',
-    background: 'var(--color-surface-card)',
-    borderRadius: 'var(--radius-2xl)',
-    boxShadow: 'var(--shadow-card)',
+  root: {
     position: 'relative',
-    overflow: 'hidden',
-    flexShrink: 0,  // content (flex column) の中で縮ませない
+    flexShrink: 0,
+    overflow: 'visible',
   },
-
-  // ── 背景画像 ──
-  bgWrapper: {
-    position: 'absolute',
-    top: 0, left: 0, right: 0,
-    height: '100%',
+  bannerWrap: {
+    position: 'relative',
+    height: 96,
     overflow: 'hidden',
-    borderRadius: 'var(--radius-2xl)',
+    background: '#c5cedb',
     zIndex: 0,
   },
-  bgImg: {
+  bannerImg: {
     width: '100%',
     height: '100%',
     objectFit: 'cover',
     objectPosition: 'center',
+    display: 'block',
     opacity: 0,
-    transition: `opacity var(--transition-normal)`,
+    transition: 'opacity var(--transition-normal)',
   },
-
-  // ── 接続バー ──
-  // height を固定することで、コンテンツが変わってもカードが伸縮しない
-  connectionSection: {
-    position: 'relative',
-    zIndex: 1,
-    display: 'flex',
-    alignItems: 'center',
-    height: 'var(--conn-bar-height)',  // ← 固定高さ（旧: minHeight: '18px'）
-    overflow: 'hidden',
+  bannerFallback: {
+    width: '100%',
+    height: '100%',
+    background: '#c5cedb',
   },
-
-  // 各状態の行（高さは connectionSection に依存）
-  connRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 'var(--space-1)',
-    flex: 1,
-    overflow: 'hidden',
-  },
-  viewModeRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 'var(--space-1)',
-    flex: 1,
-    overflow: 'hidden',
-  },
-
-  // アイコン（絵文字サイズを明示）
-  connIcon: {
-    fontSize: '0.9rem',
-    flexShrink: 0,
-    lineHeight: 1,
-  },
-
-  // テキスト各種
-  viewModeText: {
-    fontSize: 'var(--text-sm)',
-    color: 'var(--color-text-viewmode)',
-    fontWeight: '600',
-    whiteSpace: 'nowrap',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-  },
-  connectedText: {
-    fontSize: 'var(--text-sm)',
-    color: 'var(--color-text-connected)',
-    fontWeight: '600',
-    whiteSpace: 'nowrap',
-  },
-  viewingText: {
-    fontSize: 'var(--text-sm)',
-    color: 'var(--color-text-viewing)',
-    fontWeight: '600',
-    whiteSpace: 'nowrap',
-  },
-  disconnectedText: {
-    fontSize: 'var(--text-sm)',
-    color: 'var(--color-text-muted)',
-    whiteSpace: 'nowrap',
-  },
-
-  // ── スケルトン ──
-  skeletonIcon: {
-    width: 'var(--text-sm)',
-    height: 'var(--text-sm)',
-    borderRadius: 'var(--radius-full)',
-    flexShrink: 0,
-  },
-  skeletonText: {
-    width: '120px',
-    height: '12px',
-    borderRadius: 'var(--radius-xs)',
-  },
-
-  // ── ボタン群 ──
-  exitButton: {
+  bannerFade: {
     position: 'absolute',
-    right: 'var(--space-1)',
-    top: 0,
-    height: 'var(--conn-bar-height)',
-    display: 'flex',
-    alignItems: 'center',
-    padding: '0 var(--space-1)',
-    background: 'var(--color-surface-danger-light)',
-    border: 'none',
-    borderRadius: 'var(--radius-sm)',
-    color: 'var(--color-text-danger)',
-    fontSize: 'var(--text-xs)',
-    fontWeight: '600',
-    cursor: 'pointer',
-    flexShrink: 0,
-    zIndex: 2,
-    boxSizing: 'border-box',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 24,
+    background: 'linear-gradient(to bottom, transparent, var(--paper))',
+    pointerEvents: 'none',
   },
-  searchButton: {
+  bannerBar: {
     position: 'absolute',
-    right: 'var(--space-1)',
-    top: 0,
-    width: '28px',
-    height: 'var(--conn-bar-height)',
+    top: 12,
+    left: 12,
+    right: 12,
+    zIndex: 3,
+    pointerEvents: 'auto',
     display: 'flex',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    justifyContent: 'center',
-    padding: 0,
-    background: 'rgba(255,255,255,0.8)',
-    border: `1px solid var(--color-border-default)`,
-    borderRadius: 'var(--radius-sm)',
-    fontSize: '0.85rem',
+  },
+  chip: {
+    fontSize: 11,
+    fontWeight: 600,
+    borderRadius: 999,
+    padding: '5px 10px',
+    background: 'var(--chip)',
+    color: '#f4f7fb',
+  },
+  chipSkim: {
+    width: 88,
+    height: 24,
+    borderRadius: 999,
+  },
+  bannerActions: {
+    display: 'flex',
+    gap: 6,
+  },
+  chipButton: {
+    fontSize: 11,
+    fontWeight: 600,
+    border: 0,
+    borderRadius: 999,
+    padding: '5px 10px',
+    background: 'var(--chip)',
+    color: '#f4f7fb',
     cursor: 'pointer',
-    flexShrink: 0,
-    zIndex: 2,
-    boxSizing: 'border-box',
   },
-  switchButton: {
-    marginLeft: 'auto',
-    marginRight: '34px',
-    height: 'var(--conn-bar-height)',
+  identity: {
     display: 'flex',
-    alignItems: 'center',
-    padding: '2px var(--space-2)',
-    background: 'var(--color-border-default)',
-    border: 'none',
-    borderRadius: 'var(--radius-sm)',
-    color: 'var(--color-text-secondary)',
-    fontSize: 'var(--text-xs)',
-    fontWeight: '600',
-    cursor: 'pointer',
-    flexShrink: 0,
-    boxSizing: 'border-box',
-  },
-  connectButton: {
-    marginRight: '34px',
-    height: 'var(--conn-bar-height)',
-    display: 'flex',
-    alignItems: 'center',
-    padding: '2px var(--space-3)',
-    background: 'var(--gradient-brand)',
-    border: 'none',
-    borderRadius: 'var(--radius-sm)',
-    color: 'var(--color-text-white)',
-    fontSize: 'var(--text-xs)',
-    fontWeight: '700',
-    cursor: 'pointer',
-    flexShrink: 0,
-    boxSizing: 'border-box',
-  },
-  connectButtonDisabled: {
-    opacity: 0.6,
-    cursor: 'not-allowed',
-  },
-
-  // ── プロフィールセクション（共通ベース） ──
-  // height 固定 + overflow:hidden で、どの状態でもカード高さが変わらない。
-  // flex row で左にアバター（またはアイコン）、右にテキストを並べる。
-  // これにより placeholder と profile で同じ高さになる。
-  placeholderSection: {
-    display: 'flex',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 'var(--space-3)',
-    height: 'var(--profile-section-height)',
-    overflow: 'hidden',
+    gap: 14,
+    alignItems: 'flex-end',
+    padding: '0 16px 8px',
     position: 'relative',
     zIndex: 1,
-    paddingTop: 'var(--space-1)',
   },
-  placeholderIcon: {
-    fontSize: '1.5rem',
-    flexShrink: 0,
-    width: 'var(--avatar-size-lg)',  // avatar と同幅でアライン揃え
-    textAlign: 'center',
-  },
-  placeholderText: {
-    margin: 0,
-    fontSize: 'var(--text-base)',
-    color: 'var(--color-text-faint)',
-  },
-
-  profileSection: {
-    display: 'flex',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 'var(--space-3)',
-    height: 'var(--profile-section-height)',
-    overflow: 'hidden',
-    position: 'relative',
-    zIndex: 1,
-    paddingTop: 'var(--space-1)',
-  },
-
-  // ── アバター ──
   avatar: {
     width: 'var(--avatar-size-lg)',
     height: 'var(--avatar-size-lg)',
-    borderRadius: 'var(--radius-full)',
+    borderRadius: '50%',
+    border: '3px solid var(--paper)',
     objectFit: 'cover',
-    border: '1px solid var(--color-state-empty-subtle)',
-    boxShadow: 'var(--shadow-avatar)',
     flexShrink: 0,
+    marginTop: -20,
+    background: 'var(--accent-soft)',
   },
-  avatarPlaceholder: {
+  avatarFallback: {
     width: 'var(--avatar-size-lg)',
     height: 'var(--avatar-size-lg)',
-    borderRadius: 'var(--radius-full)',
-    background: 'var(--gradient-brand)',
+    borderRadius: '50%',
+    border: '3px solid var(--paper)',
+    flexShrink: 0,
+    marginTop: -20,
+    background: 'var(--accent-soft)',
+    color: 'var(--accent)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    fontSize: '1.5rem',
-    fontWeight: 'bold',
-    color: 'var(--color-text-white)',
-    border: '1px solid var(--color-state-empty-subtle)',
-    flexShrink: 0,
+    fontSize: 18,
+    fontWeight: 700,
   },
-  loadingSpinner: {
-    fontSize: '1.2rem',
-    // pulse アニメーションは globals.css @keyframes pulse で定義
-    animation: 'pulse 1.5s ease-in-out infinite',
+  who: {
+    minWidth: 0,
+    flex: 1,
   },
-
-  // ── テキスト情報 ──
-  info: { flex: 1, minWidth: 0 },
-  name: {
-    margin: '0 0 2px 0',
-    fontSize: 'var(--text-md)',
-    fontWeight: '700',
-    color: 'var(--color-text-primary)',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  address: {
+  nameSkim: {
+    width: 110,
+    height: 18,
+    borderRadius: 4,
     margin: 0,
-    fontSize: 'var(--text-sm)',
-    color: 'var(--color-text-muted)',
-    fontFamily: 'monospace',
+  },
+  name: {
+    margin: 0,
+    fontSize: 18,
+    fontWeight: 650,
+    letterSpacing: '-0.02em',
+    lineHeight: 1.15,
+    color: 'var(--ink)',
+  },
+  addr: {
+    display: 'block',
+    margin: '4px 0 0',
+    fontSize: 11,
+    color: 'var(--mute)',
+    fontVariantNumeric: 'tabular-nums',
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
     wordBreak: 'break-all',
+    lineHeight: 1.35,
+    textDecoration: 'none',
+  },
+  connect: {
+    marginTop: 6,
+    border: 0,
+    background: 'transparent',
+    color: 'var(--accent)',
+    fontSize: 13,
+    fontWeight: 650,
+    padding: 0,
+    cursor: 'pointer',
   },
 };

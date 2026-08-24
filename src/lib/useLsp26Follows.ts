@@ -1,5 +1,11 @@
-// LSP26 コントラクトからアドレス一覧を取得し、lsp-indexer でプロフィールをバッチ取得するフック。
+// LSP26 コントラクトからアドレス一覧を取得し、Envio でプロフィールをバッチ取得するフック。
 // useInfiniteFollows の代替。アドレス一覧の正確性を LSP26 で保証する。
+//
+// Refactored (2026-08):
+// - Envio queries via shared src/lib/envio.ts (variables, abort support)
+// - Profile cache: TtlLruCache — negative results ("Unknown") expire after
+//   2 min so a transient Envio outage doesn't permanently show Unknown.
+//   Positive results are session-cached as before.
 
 'use client';
 
@@ -7,9 +13,9 @@ import { useUpProvider } from '@/lib/up-provider';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { ethers } from 'ethers';
 import { LUKSO_RPC_URL, LSP26_ADDRESS } from '@/lib/constants';
-
-// Profile クエリは Envio 直接（Vercel プロキシは Profile エンティティ非対応）
-const ENVIO_URL = 'https://envio.lukso-mainnet.universal.tech/v1/graphql';
+import { envioQuery } from '@/lib/envio';
+import { TtlLruCache } from '@/lib/cache';
+import { getRpcProvider } from '@/lib/rpc';
 
 // ─── LSP26 ABI（必要最小限）──────────────────────────────
 
@@ -21,12 +27,6 @@ const LSP26_ABI = [
 ];
 
 // ─── 型定義 ──────────────────────────────────────────────
-
-export interface Lsp26ProfileRow {
-  addr: string;
-  name: string;
-  indexerImageUrl?: string;
-}
 
 export interface UseLsp26FollowsReturn {
   followerAddresses: string[];
@@ -56,38 +56,30 @@ async function fetchProfilesBatch(
 
   await Promise.all(
     batches.map(async (batch) => {
-      const addrFilter = batch.map((a) => `"${a.toLowerCase()}"`).join(',');
-      const query = `{Profile(where:{id:{_in:[${addrFilter}]}}){id name profileImages{url}}}`;
-
       try {
-        const res = await fetch(ENVIO_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query }),
-        });
-        if (!res.ok) return;
-
-        const json = await res.json();
-        const profiles = json.data?.Profile ?? [];
+        const data = await envioQuery<{ Profile: any[] }>(
+          `query FollowProfiles($ids: [String!]) {
+            Profile(where:{id:{_in:$ids}}){ id name profileImages{url} }
+          }`,
+          { ids: batch },
+        );
+        const profiles = data?.Profile ?? [];
 
         for (const p of profiles) {
           const addr = p.id.toLowerCase();
           const imageUrl = p.profileImages?.[0]?.url ?? undefined;
           result.set(addr, { name: p.name || 'Unknown', profileImage: imageUrl });
         }
-
-        // プロフィールが見つからなかったアドレスも登録
-        for (const addr of batch) {
-          if (!result.has(addr.toLowerCase())) {
-            result.set(addr.toLowerCase(), { name: 'Unknown' });
-          }
-        }
       } catch {
-        // エラー時は Unknown で登録
-        for (const addr of batch) {
-          if (!result.has(addr.toLowerCase())) {
-            result.set(addr.toLowerCase(), { name: 'Unknown' });
-          }
+        // バッチ全体の失敗 — 個別登録せず、キャッシュ非保存扱いにする
+        // （呼び出し側で TTL キャッシュに入れないため自動リトライされる）
+        return;
+      }
+
+      // プロフィールが見つからなかったアドレスのみ Unknown を登録
+      for (const addr of batch) {
+        if (!result.has(addr.toLowerCase())) {
+          result.set(addr.toLowerCase(), { name: 'Unknown' });
         }
       }
     }),
@@ -99,8 +91,14 @@ async function fetchProfilesBatch(
 // ─── フック ──────────────────────────────────────────────
 
 // モジュールレベルキャッシュ
+// アドレス一覧はオンチェーン確定値（セッション保持）
 const _addressCache = new Map<string, { followers: string[]; following: string[] }>();
-const _profileCache = new Map<string, Map<string, { name: string; profileImage?: string }>>();
+// プロフィールは TTL 付き（Unknown=否定的結果は2分で失効し再取得）
+const _profileCache = new TtlLruCache<Map<string, { name: string; profileImage?: string }>>({
+  maxSize: 50,
+  ttlMs: Number.POSITIVE_INFINITY,
+  negativeTtlMs: 120_000,
+});
 
 export function useLsp26Follows(address?: string): UseLsp26FollowsReturn {
   const { displayAddress } = useUpProvider();
@@ -144,8 +142,9 @@ export function useLsp26Follows(address?: string): UseLsp26FollowsReturn {
     setError(null);
 
     try {
-      const provider = new ethers.JsonRpcProvider(LUKSO_RPC_URL);
+      const provider = getRpcProvider();
       const contract = new ethers.Contract(LSP26_ADDRESS, LSP26_ABI, provider);
+      void LUKSO_RPC_URL; // RPC URL is encapsulated in lib/rpc
 
       // LSP26 からカウント取得
       const [followerCountRaw, followingCountRaw] = await Promise.all([
@@ -174,7 +173,7 @@ export function useLsp26Follows(address?: string): UseLsp26FollowsReturn {
       const followerAddrsLower = followerAddrs.map((a) => a.toLowerCase()).reverse();
       const followingAddrsLower = followingAddrs.map((a) => a.toLowerCase()).reverse();
 
-      // アドレスキャッシュに保存
+      // アドレスキャッシュに保存（オンチェーン確定値なのでセッション保持）
       _addressCache.set(targetAddress, {
         followers: followerAddrsLower,
         following: followingAddrsLower,
@@ -183,7 +182,7 @@ export function useLsp26Follows(address?: string): UseLsp26FollowsReturn {
       setFollowerAddresses(followerAddrsLower);
       setFollowingAddresses(followingAddrsLower);
 
-      // lsp-indexer でプロフィールをバッチ取得
+      // Envio でプロフィールをバッチ取得
       const [fProfiles, gProfiles] = await Promise.all([
         fetchProfilesBatch(followerAddrsLower),
         fetchProfilesBatch(followingAddrsLower),
@@ -191,7 +190,7 @@ export function useLsp26Follows(address?: string): UseLsp26FollowsReturn {
 
       if (controller.signal.aborted) return;
 
-      // プロフィールキャッシュに保存
+      // プロフィールキャッシュに保存（TTL 付き）
       _profileCache.set(`${targetAddress}:followers`, fProfiles);
       _profileCache.set(`${targetAddress}:following`, gProfiles);
 
@@ -209,7 +208,7 @@ export function useLsp26Follows(address?: string): UseLsp26FollowsReturn {
   }, [targetAddress]);
 
   const refetch = useCallback(() => {
-    // キャッシュをクリアして再取得
+    // プロフィールキャッシュをクリアして再取得（アドレス一覧も再確認）
     _addressCache.delete(targetAddress);
     _profileCache.delete(`${targetAddress}:followers`);
     _profileCache.delete(`${targetAddress}:following`);
