@@ -478,7 +478,26 @@ function NftCollectionHeaderRow({ coll, isExpanded, onToggle, renderIcon }: {
   );
 }
 
-// ─── NftList ───────────────────────────────────────────────
+// ─── AssetListSkeleton ───────────────────────────────────────
+// ローディング中に行形状のスケルトンを出し、
+// 「No tokens found」フラッシュとデータ到着時のレイアウトジャンプを防ぐ。
+function AssetListSkeleton({ rows = 5 }: { rows?: number }) {
+  return (
+    <>
+      {Array.from({ length: rows }, (_, i) => (
+        <div key={i} style={styles.item}>
+          <div className="skim" style={styles.itemIcon} />
+          <div style={styles.itemInfo}>
+            <div className="skim" style={{ width: 110, height: 13, borderRadius: 4 }} />
+            <div className="skim" style={{ width: 64, height: 11, borderRadius: 4 }} />
+          </div>
+        </div>
+      ))}
+    </>
+  );
+}
+
+// ─── NftList ─────────────────────────────────────────────────
 // displayLimitNfts で表示件数が制御されるため仮想化は不要。
 // 通常リストにすることでスクロールバーが安定し縮小しなくなる。
 // モジュールレベル定義は維持（AssetList 再レンダー時の scroll-to-top を防ぐ）。
@@ -504,7 +523,7 @@ const NftVirtualList = memo(function NftVirtualList({
   if (rows.length === 0) return <p style={styles.empty}>No NFTs found</p>;
 
   return (
-    <div style={styles.list}>
+    <div className="uv-scroll" style={styles.list}>
       {rows.map((row, i) => (
         <div key={nftRowKey(row, i)}>
           {renderRow(row)}
@@ -570,6 +589,7 @@ export function AssetList({ address, active = true }: AssetListProps) {
   const {
     ownedAssets, hasNextPage: hasMoreAssets, fetchNextPage: fetchMoreAssets,
     isFetchingNextPage: loadingMoreAssets,
+    isLoading: isLoadingAssets,
   } = useInfiniteOwnedAssets({
     filter: { holderAddress: fetchAddress },
     include: { balance: true, digitalAsset: { name: true, symbol: true, tokenType: true, decimals: true, icons: true, images: true } },
@@ -579,6 +599,7 @@ export function AssetList({ address, active = true }: AssetListProps) {
   const {
     ownedTokens, hasNextPage: hasMoreTokens, fetchNextPage: fetchMoreTokens,
     isFetchingNextPage: loadingMoreTokens,
+    isLoading: isLoadingTokens,
   } = useInfiniteOwnedTokens({
     filter: { holderAddress: fetchAddress },
     include: { digitalAsset: { name: true, symbol: true, tokenType: true, icons: true }, nft: { formattedTokenId: true, name: true, icons: true, images: true } },
@@ -838,8 +859,10 @@ export function AssetList({ address, active = true }: AssetListProps) {
   const showPlaceholder = !targetAddress;
 
   const renderTokenList = (items: TokenItem[]) => (
-    <div style={styles.list}>
-      {items.length === 0 ? <p style={styles.empty}>No tokens found</p> : items.map((item) => {
+    <div className="uv-scroll" style={styles.list}>
+      {isLoadingAssets ? (
+        <AssetListSkeleton />
+      ) : items.length === 0 ? <p style={styles.empty}>No tokens found</p> : items.map((item) => {
         if (item.type === 'LYX') {
           return (
             <div
@@ -1013,7 +1036,7 @@ export function AssetList({ address, active = true }: AssetListProps) {
     <div style={styles.card}>
       {showPlaceholder && <p style={styles.empty}>No profile connected</p>}
       {targetAddress && (
-        <div className="content-reveal" style={styles.cardBody}>
+        <div style={styles.cardBody}>
           <div style={styles.toolbar}>
             <div style={styles.segGroup}>
               <button style={{ ...styles.seg, ...(activeTab === 'tokens' ? styles.segActive : {}) }} onClick={() => setActiveTab('tokens')}>
@@ -1053,11 +1076,9 @@ export function AssetList({ address, active = true }: AssetListProps) {
             <div style={{ display: activeTab === 'nfts' ? 'flex' : 'none', flexDirection: 'column', height: '100%', minHeight: '60px' }}>
               {!targetAddress ? (
                 <p style={styles.empty}>No profile connected</p>
-              ) : virtualRows.length === 0 && ownedTokens.length === 0 ? (
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 'var(--space-2)' }}>
-                  <div className="skim" style={{ width: '70%', height: '36px', borderRadius: 'var(--radius-md)' }} />
-                  <div className="skim" style={{ width: '55%', height: '36px', borderRadius: 'var(--radius-md)' }} />
-                  <div className="skim" style={{ width: '62%', height: '36px', borderRadius: 'var(--radius-md)' }} />
+              ) : isLoadingTokens ? (
+                <div className="uv-scroll" style={styles.list}>
+                  <AssetListSkeleton />
                 </div>
               ) : virtualRows.length === 0 ? (
                 <p style={styles.empty}>No NFTs found</p>
@@ -1142,13 +1163,6 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
     minHeight: 0,
     position: 'relative',
-  },
-  title: {
-    margin: '0 0 var(--space-2) 0',
-    fontSize: 'var(--text-lg)',
-    fontWeight: '700',
-    color: 'var(--color-text-primary)',
-    flexShrink: 0,
   },
   toolbar: {
     display: 'flex',
@@ -1321,9 +1335,5 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: '600',
     cursor: 'pointer',
     transition: `all var(--transition-fast)`,
-  },
-  showMoreButtonLoading: {
-    opacity: 0.6,
-    cursor: 'not-allowed',
   },
 };

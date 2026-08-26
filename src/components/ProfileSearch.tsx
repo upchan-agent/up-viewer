@@ -180,7 +180,7 @@ export function ProfileSearch({ onSelect, onCancel }: ProfileSearchProps) {
       </div>
 
       {showDropdown && results.length > 0 && (
-        <div key={`dd-${resultsTick}`} style={styles.dropdown}>
+        <div key={`dd-${resultsTick}`} className="uv-scroll" style={styles.dropdown}>
           {results.map((r) => (
             <button key={r.id} style={styles.resultItem} onClick={() => handleSelect(r)}>
               <div style={styles.resultAvatar}>
@@ -299,12 +299,13 @@ const styles: Record<string, React.CSSProperties> = {
   },
   resultUpName: {
     fontSize: 'var(--text-xs)',
-    color: 'var(--color-brand)',
+    color: 'var(--accent)',
     fontWeight: '500',
   },
   resultAddress: {
     fontSize: 'var(--text-xs)',
     color: 'var(--color-text-faint)',
-    fontFamily: 'monospace',
+    fontFamily: 'var(--font-stack-mono)',
+    fontVariantNumeric: 'tabular-nums',
   },
 };

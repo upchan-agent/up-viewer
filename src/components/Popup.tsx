@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef, memo } from 'react';
+import { useState, useEffect, useCallback, memo } from 'react';
+import { createPortal } from 'react-dom';
 import { ErrorImage } from '@/components/ErrorImage';
 import { TRACE_GLYPH, type TraceStep } from '@/lib/debug-trace';
 
@@ -143,9 +144,13 @@ export const Popup = memo(function Popup({
     ? <ErrorImage src={image.url} style={styles.bannerAvatar} fallback={<div style={styles.bannerAvatarPlaceholder} />} />
     : <div style={styles.bannerAvatarPlaceholder} />;
 
-  return (
+  return createPortal(
     <div style={styles.overlay} onClick={onClose}>
-      <div style={styles.popup} onClick={(e) => e.stopPropagation()}>
+      {/* uv-scroll: スクロールバーの有無でコンテンツ幅が変わり、
+          読み込み前後で左に詰まるのを防ぐ（gutter 常時予約）。
+          overlay は createPortal で document.body 直下に描画するため、
+          タブ切り替え（opacity 合成レイヤー）の影響で黒い残像が残らない。 */}
+      <div className="uv-scroll" style={styles.popup} onClick={(e) => e.stopPropagation()}>
 
         {/* Close button — always on top */}
         <button style={styles.closeButton} onClick={onClose}>×</button>
@@ -187,13 +192,18 @@ export const Popup = memo(function Popup({
           </div>
         )}
 
-        <div style={{ ...styles.header, ...(useBannerLayout ? { marginTop: '36px' } : {}) }}>
+        {/* Header — banner かどうかで top margin が変わるが、
+            バナーのアバター(64px)が下方向に 28px はみ出すため固定値で補正。
+            name / subLabel の有無で高さを変えない（minHeight で予約）。 */}
+        <div style={{ ...styles.header, ...(useBannerLayout ? { marginTop: 36 } : {}) }}>
           {name
             ? <h3 style={styles.name}>{name}</h3>
             : isLoading
               ? <div className="skim" style={styles.nameSkim} />
-              : null}
-          {subLabel && <span style={styles.subLabel}>{subLabel}</span>}
+              : <h3 style={styles.name}>&nbsp;</h3>}
+          {subLabel
+            ? <span style={styles.subLabel}>{subLabel}</span>
+            : <span style={styles.subLabel}>&nbsp;</span>}
         </div>
 
         {onView && (
@@ -317,7 +327,8 @@ export const Popup = memo(function Popup({
         )}
 
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 });
 
@@ -330,9 +341,11 @@ export const Popup = memo(function Popup({
 const styles: Record<string, React.CSSProperties> = {
   overlay: {
     position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-    background: 'rgba(0,0,0,0.3)', zIndex: 9999,
+    background: 'rgba(15, 20, 30, 0.42)', zIndex: 9999,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    backdropFilter: 'blur(2px)',
+    // backdrop-filter は意図的に不使用: タブ切り替え時に合成レイヤー上に
+    // 黒い残像が残る原因だった。半透明の塗りだけで十分に分離できる。
+    animation: 'popupIn 0.15s ease',
   },
   popup: {
     background: 'var(--color-surface-input)',
@@ -396,14 +409,20 @@ const styles: Record<string, React.CSSProperties> = {
   bannerAvatar: { width: '100%', height: '100%', objectFit: 'cover' },
   bannerAvatarPlaceholder: { width: '100%', height: '100%', borderRadius: 'var(--radius-full)', background: 'var(--color-state-resolving)', border: '2px solid var(--color-state-empty)' },
 
-  // ヘッダー
-  header: { marginBottom: 'var(--space-1)', marginTop: '0', minHeight: 36 },
+  // ヘッダー — name/subLabel の有無で高さが変わらないよう固定行高を予約。
+  // name 行: 23px (18px font), subLabel 行: 17px (12px font)。
+  header: { marginBottom: 'var(--space-1)', marginTop: 0 },
   name: {
-    fontSize: 'var(--text-xl)', fontWeight: '700',
-    color: 'var(--color-text-primary)', margin: 0, lineHeight: 1.3,
+    fontSize: 'var(--text-xl)', fontWeight: 700,
+    color: 'var(--color-text-primary)', margin: 0,
+    lineHeight: '23px', minHeight: 23,
+    wordBreak: 'break-word',
   },
   subLabel: {
-    fontSize: '0.8rem', color: 'var(--color-text-muted)', fontWeight: '500',
+    display: 'block',
+    fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)', fontWeight: 500,
+    lineHeight: '17px', minHeight: 17,
+    fontFamily: 'var(--font-stack-mono)',
   },
 
   // タグ

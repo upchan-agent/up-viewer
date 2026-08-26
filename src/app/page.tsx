@@ -144,8 +144,13 @@ export default function Page() {
 // ─── Styles ──────────────────────────────────────────────────
 // Phase 2-1: container を flex column にしてビューポート全体を占有。
 //            content が flex:1 で伸長し、tabPanel がその余白を埋める。
-// Phase 3:   display:none を廃止、常時マウント + opacity/position 切り替えに変更。
-//            virtualizer が常に正しいコンテナ高さを認識し、タブ遷移の伸縮を解消。
+// Tab panels: 非アクティブタブは display:none。
+//   - React コンポーネントはマウントされたまま（状態・スクロール位置・
+//     フェッチ済みデータは保持される）
+//   - 描画はされないため合成レイヤーが残らず、デスクトップ Chrome で
+//     タブ切替時に黒い焼き付き（コンポジティング残像）が出ない
+//   - 旧「常時マウント + opacity 切替」は virtualizer 用だったが、
+//     virtualizer は廃止済みのため不要になった
 
 const styles: { [key: string]: React.CSSProperties } = {
   container: {
@@ -205,18 +210,9 @@ const styles: { [key: string]: React.CSSProperties } = {
     height: '100%',
     display: 'flex',
     flexDirection: 'column',
-    opacity: 1,
-    pointerEvents: 'auto' as const,
-    zIndex: 1,
   },
   tabWrapperInactive: {
-    position: 'absolute' as const,
-    inset: 0,
-    display: 'flex',
-    flexDirection: 'column',
-    opacity: 0,
-    pointerEvents: 'none' as const,
-    zIndex: 0,
+    display: 'none',
   },
   suspenseFallback: {
     height: '100dvh',

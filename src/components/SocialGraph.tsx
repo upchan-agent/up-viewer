@@ -30,6 +30,13 @@ interface SocialGraphProps {
 // List row component. Delegates image resolution to useProfileImage.
 // Defined at module level to prevent re-mount on parent re-render.
 
+// ─── ProfileListItem ───────────────────────────────────────
+// List row component. Delegates image resolution to useProfileImage.
+// Defined at module level to prevent re-mount on parent re-render.
+//
+// 相互フォローの表現: 🤝 を名前の後ろに置く。
+// 名前と別要素にすることで、長い名前の ellipsis に巻き込まれない。
+
 const ProfileListItem = memo(function ProfileListItem({
   name,
   address,
@@ -47,20 +54,47 @@ const ProfileListItem = memo(function ProfileListItem({
   const imageUrl = resolved?.profileImageUrl || undefined;
 
   return (
-    <div className="list-item" style={styles.item} onClick={() => onSelect(address)}>
+    <div
+      className="list-item"
+      style={styles.item}
+      onClick={() => onSelect(address)}
+      title={isMutual ? 'Mutual follow' : undefined}
+    >
       {imageUrl ? (
         <ErrorImage src={imageUrl} style={styles.itemAvatar} fallback={<div style={styles.itemAvatarPlaceholder} />} />
       ) : (
         <div style={styles.itemAvatarPlaceholder} />
       )}
       <div style={styles.itemInfo}>
-        <span style={styles.itemName}>{name}{isMutual ? ' · mutual' : ''}</span>
+        <div style={styles.itemNameRow}>
+          <span style={styles.itemName} title={name}>{name}</span>
+          {isMutual && <span style={styles.mutualMark}>🤝</span>}
+        </div>
         <span style={styles.itemAddress} title={address}>{shortenAddress(address)}</span>
       </div>
       <span style={{ fontSize: '1.2rem', color: 'var(--color-border-muted)', flexShrink: 0 }}>›</span>
     </div>
   );
 });
+
+// ─── ListSkeleton ────────────────────────────────────────────
+// ローディング中に行形状のスケルトンを表示し、
+// 「No ... found」のフラッシュとデータ到着時のレイアウトジャンプを防ぐ。
+function ListSkeleton({ rows = 5 }: { rows?: number }) {
+  return (
+    <div className="uv-scroll" style={styles.list}>
+      {Array.from({ length: rows }, (_, i) => (
+        <div key={i} style={styles.item}>
+          <div className="skim" style={styles.itemAvatarPlaceholder} />
+          <div style={styles.itemInfo}>
+            <div className="skim" style={{ width: 120, height: 13, borderRadius: 4 }} />
+            <div className="skim" style={{ width: 76, height: 10, borderRadius: 4 }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 // ─── ProfileVirtualList ────────────────────────────────────
 // ─── ProfileList ────────────────────────────────────────────
@@ -81,20 +115,24 @@ const ProfileVirtualList = memo(function ProfileVirtualList({
   emptyLabel,
   hasMore,
   onLoadMore,
+  isLoading,
 }: {
   rows: ProfileRow[];
   onSelect: (addr: string) => void;
   emptyLabel: string;
   hasMore?: boolean;
   onLoadMore?: () => void;
-  isLoadingMore?: boolean;
+  isLoading?: boolean;
   listRef?: React.RefObject<HTMLDivElement | null>;  // 後方互換のため残す
 }) {
+  // ローディング中は「No ... found」ではなく行スケルトンを出し、
+  // データ到着時のレイアウトジャンプを防ぐ
+  if (isLoading) return <ListSkeleton />;
   if (rows.length === 0) return <p style={styles.empty}>{emptyLabel}</p>;
 
   return (
     <>
-      <div style={styles.list}>
+      <div className="uv-scroll" style={styles.list}>
         {rows.map(row => (
           <ProfileListItem
             key={row.addr}
@@ -379,7 +417,7 @@ export function SocialGraph({ address, active = true, onViewMode }: SocialGraphP
       {showPlaceholder && <p style={styles.empty}>No profile connected</p>}
 
       {targetAddress && (
-        <div className="content-reveal" style={styles.cardBody}>
+        <div style={styles.cardBody}>
           <div style={styles.toolbar}>
             <div style={styles.segGroup}>
               <button onClick={() => setActiveTab('following')} style={{ ...styles.seg, ...(activeTab === 'following' ? styles.segActive : {}) }}>
@@ -407,6 +445,7 @@ export function SocialGraph({ address, active = true, onViewMode }: SocialGraphP
                 emptyLabel="No following found"
                 hasMore={displayLimitFollowing < followingRows.length}
                 onLoadMore={() => setDisplayLimitFollowing(n => n + DISPLAY_PAGE)}
+                isLoading={isLoadingFollows}
               />
             </div>
             <div style={{ display: activeTab === 'followers' ? 'flex' : 'none', flexDirection: 'column', height: '100%' }}>
@@ -416,6 +455,7 @@ export function SocialGraph({ address, active = true, onViewMode }: SocialGraphP
                 emptyLabel="No followers found"
                 hasMore={displayLimitFollowers < followerRows.length}
                 onLoadMore={() => setDisplayLimitFollowers(n => n + DISPLAY_PAGE)}
+                isLoading={isLoadingFollows}
               />
             </div>
           </div>
@@ -455,13 +495,6 @@ const styles: { [key: string]: React.CSSProperties } = {
     flex: 1,
     minHeight: 0,
     position: 'relative',
-  },
-  title: {
-    margin: '0 0 var(--space-2) 0',
-    fontSize: 'var(--text-lg)',
-    fontWeight: '700',
-    color: 'var(--color-text-primary)',
-    flexShrink: 0,
   },
   toolbar: {
     display: 'flex',
@@ -548,17 +581,34 @@ const styles: { [key: string]: React.CSSProperties } = {
     flexDirection: 'column',
     gap: '2px',
   },
+  // 名前行: 名前 + 🤝（mutual のみ）。別要素なので長い名前の
+  // ellipsis に絵文字が巻き込まれない。
+  itemNameRow: {
+    display: 'flex',
+    alignItems: 'baseline',
+    gap: 'var(--space-1)',
+    minWidth: 0,
+  },
+  mutualMark: {
+    flexShrink: 0,
+    fontSize: 13,
+    lineHeight: 1,
+  },
   itemName: {
     fontSize: 'var(--text-md)',
-    fontWeight: '600',
+    fontWeight: 600,
     color: 'var(--color-text-secondary)',
-    wordBreak: 'break-word',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    minWidth: 0,
     lineHeight: 1.3,
   },
   itemAddress: {
     fontSize: 'var(--text-xs)',
     color: 'var(--color-text-faint)',
-    fontFamily: 'monospace',
+    fontFamily: 'var(--font-stack-mono)',
+    fontVariantNumeric: 'tabular-nums',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
@@ -586,9 +636,5 @@ const styles: { [key: string]: React.CSSProperties } = {
     fontWeight: '600',
     cursor: 'pointer',
     transition: `all var(--transition-fast)`,
-  },
-  showMoreButtonLoading: {
-    opacity: 0.6,
-    cursor: 'not-allowed',
   },
 };
