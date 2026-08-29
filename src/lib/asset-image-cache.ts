@@ -99,6 +99,7 @@ const _apiCache = new TtlLruCache<string>({
 // キー単位サブスクライバー: そのキーが解決した時だけ通知する。
 // グローバル broadcast を避け、不要な全体再レンダーを防ぐ。
 const _apiSubs = new Map<string, Set<() => void>>();
+const _apiInFlight = new Set<string>();
 
 export function apiSubscribe(key: string, cb: () => void): () => void {
   if (!_apiSubs.has(key)) _apiSubs.set(key, new Set());
@@ -140,17 +141,21 @@ export function apiFetch(
   fn: () => Promise<string | null>,
   priority = false,
 ) {
-  if (_apiCache.has(key)) return; // settled (positive or within retry window)
+  if (_apiCache.has(key) || _apiInFlight.has(key)) return;
   if (_isPopupOpen && !priority) {
     if (!_deferredFetches.some(d => d.key === key)) {
       _deferredFetches.push({ key, fn });
     }
     return;
   }
+  _apiInFlight.add(key);
   fetchWithLimit(fn)
     .then(url => { _apiCache.set(key, url); })
     .catch(() => { /* limiter/retry exhausted — stays unset, retried on next mount */ })
-    .finally(() => { _apiNotify(key); });
+    .finally(() => {
+      _apiInFlight.delete(key);
+      _apiNotify(key);
+    });
 }
 
 // ─── Direct cache read (read-only access for AssetList hooks) ──
@@ -192,6 +197,7 @@ export function useAssetImage({
   isPopupContext?: boolean;
 }): ResolvedAssetImage | undefined {
   const imageCacheKey = `${type}:${contractAddress.toLowerCase()}`;
+  const shouldResolve = !!contractAddress && contractAddress !== 'skip';
 
   const [, setTick] = useState(0);
   useEffect(
@@ -200,9 +206,13 @@ export function useAssetImage({
   );
 
   useEffect(() => {
-    if (indexerIcon) return;
+    if (!shouldResolve || indexerIcon) return;
     apiFetch(imageCacheKey, () => fetchAssetImage(contractAddress), isPopupContext);
-  }, [imageCacheKey, contractAddress, indexerIcon, isPopupContext]);
+  }, [imageCacheKey, contractAddress, indexerIcon, isPopupContext, shouldResolve]);
+
+  if (!shouldResolve) {
+    return { url: '', scheme: 'none', trace: [] };
+  }
 
   // 1st: ownedAsset.digitalAsset.icons
   const indexerIconsUrl =

@@ -8,7 +8,7 @@ import { toGatewayUrl, shortenAddress } from '@/lib/utils';
 import { useState, useMemo, useEffect, useRef, useCallback, memo } from 'react';
 import { Popup } from '@/components/Popup';
 import type { PopupLink } from '@/components/Popup';
-import { ErrorImage } from '@/components/ErrorImage';
+import { ErrorImage, ImagePending } from '@/components/ErrorImage';
 import { traceHit, traceMiss, traceWait, isDebugEnabled, type TraceStep } from '@/lib/debug-trace';
 import {
   useResolvedProfileImage,
@@ -50,18 +50,37 @@ const ProfileListItem = memo(function ProfileListItem({
   isMutual: boolean;
   onSelect: (address: string) => void;
 }) {
-  const resolved = useResolvedProfileImage({ address, indexerImageUrl });
+  const resolved = useResolvedProfileImage({ address, indexerImageUrl, resolveBackground: false });
   const imageUrl = resolved?.profileImageUrl || undefined;
 
   return (
     <div
       className="list-item"
       style={styles.item}
+      role="button"
+      tabIndex={0}
+      aria-label={`Open ${name} profile details`}
       onClick={() => onSelect(address)}
+      onKeyDown={(event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        onSelect(address);
+      }}
       title={isMutual ? 'Mutual follow' : undefined}
     >
-      {imageUrl ? (
-        <ErrorImage src={imageUrl} style={styles.itemAvatar} fallback={<div style={styles.itemAvatarPlaceholder} />} />
+      {resolved === undefined ? (
+        <div style={{ ...styles.itemAvatarPlaceholder, display: 'grid', placeItems: 'center' }}>
+          <ImagePending />
+        </div>
+      ) : imageUrl ? (
+        <ErrorImage
+          src={imageUrl}
+          style={styles.itemAvatar}
+          loading="lazy"
+          fetchPriority="low"
+          pendingFallback={<ImagePending />}
+          fallback={<div style={styles.itemAvatarPlaceholder} />}
+        />
       ) : (
         <div style={styles.itemAvatarPlaceholder} />
       )}
@@ -85,7 +104,9 @@ function ListSkeleton({ rows = 5 }: { rows?: number }) {
     <div className="uv-scroll" style={styles.list}>
       {Array.from({ length: rows }, (_, i) => (
         <div key={i} style={styles.item}>
-          <div className="skim" style={styles.itemAvatarPlaceholder} />
+          <div style={{ ...styles.itemAvatarPlaceholder, display: 'grid', placeItems: 'center' }}>
+            <ImagePending />
+          </div>
           <div style={styles.itemInfo}>
             <div className="skim" style={{ width: 120, height: 13, borderRadius: 4 }} />
             <div className="skim" style={{ width: 76, height: 10, borderRadius: 4 }} />
@@ -220,7 +241,7 @@ function ProfilePopupContent({
   const resolvedBackgroundImageUrl = resolved.backgroundImageUrl;
   const imageScheme = isStillLoading ? 'loading' : resolved.scheme;
 
-  // Debug panel: shown always in dev, opt-in in prod via ?debug=1.
+  // Image diagnostics are always available and collapsed by default.
   const debugEnabled = isDebugEnabled();
   const debugSteps = useMemo((): TraceStep[] | undefined => {
     if (!debugEnabled) return undefined;
@@ -372,12 +393,6 @@ export function SocialGraph({ address, active = true, onViewMode }: SocialGraphP
     _setSocialPopupOpen(false);
     setSelectedAddress(null);
   }, []);
-
-  useEffect(() => {
-    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') handleClosePopup(); };
-    document.addEventListener('keydown', h);
-    return () => document.removeEventListener('keydown', h);
-  }, [handleClosePopup]);
 
   const showPlaceholder = !targetAddress;
 

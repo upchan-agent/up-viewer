@@ -9,7 +9,7 @@ import { useEffect, useState, useMemo, useCallback, useRef, memo } from 'react';
 import { ethers } from 'ethers';
 import { Popup } from '@/components/Popup';
 import type { PopupLink } from '@/components/Popup';
-import { ErrorImage } from '@/components/ErrorImage';
+import { ErrorImage, ImagePending } from '@/components/ErrorImage';
 import {
   useAssetImage,
   apiFetch,
@@ -36,9 +36,10 @@ const flattenImages = (nft: any): string[] => {
   return images.map((img: any) => img.url).filter(Boolean);
 };
 
-const isUsableIpfs = (url: string): boolean => {
-  const cid = url.replace('ipfs://', '');
-  return !(cid.startsWith('baf') && !cid.includes('.'));
+const isUsableImageUrl = (url: string): boolean => {
+  // CIDv1 does not require a file extension. Rejecting bare `baf…` values
+  // caused valid NFT images to trigger an unnecessary Envio fallback query.
+  return url.trim().length > 0;
 };
 
 const formatBalance = (balance: bigint | null, decimals: number | null | undefined): string => {
@@ -76,16 +77,41 @@ function resolveDaIcon(item: any): ResolvedIcon | null {
   return null;
 }
 
+// ─── interactive row helpers ────────────────────────────────
+
+function activateRowFromKeyboard(
+  event: React.KeyboardEvent<HTMLElement>,
+  activate: () => void,
+) {
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  event.preventDefault();
+  activate();
+}
+
 // ─── renderIcon (standalone, no re-creation on each render) ──
 
-function renderIcon(icon: ResolvedIcon | undefined, fallback: string) {
+function renderIcon(icon: ResolvedIcon | undefined, fallback: string, isLoading = false) {
   const label = fallback.slice(0, 3);
   const fallbackNode = <span style={styles.iconInitial}>{label}</span>;
+  const frameStyle = isLoading
+    ? styles.itemIconPending
+    : icon ? styles.itemIconWithImg : styles.itemIcon;
   return (
-    <div style={icon ? styles.itemIconWithImg : styles.itemIcon}>
-      {icon
-        ? <ErrorImage src={icon.url} style={styles.itemIconImg} fallback={fallbackNode} />
-        : fallbackNode}
+    <div style={frameStyle}>
+      {isLoading
+        ? <ImagePending />
+        : icon
+          ? (
+            <ErrorImage
+              src={icon.url}
+              style={styles.itemIconImg}
+              loading="lazy"
+              fetchPriority="low"
+              pendingFallback={<ImagePending />}
+              fallback={fallbackNode}
+            />
+          )
+          : fallbackNode}
     </div>
   );
 }
@@ -117,7 +143,7 @@ const isColl = (x: NftRenderItem): x is NftCollEntry => 'isCollection' in x && x
 // ─── useLsp8ChildImage ─────────────────────────────────────
 // Resolves an image for a single LSP8 child NFT.
 // Priority chain (mirrors popup exactly):
-//   1. useNft.images              (flattenImages + isUsableIpfs)
+//   1. useNft.images              (flattenImages + isUsableImageUrl)
 //   2. api.Token                  (fetchTokenImage — covers non-standard NFTs)
 //   3. useNft.icons
 //   4. useNft.collection.icons
@@ -145,6 +171,7 @@ function useLsp8ChildImage({
   isPopupContext?: boolean;
 }): (ResolvedAssetImage & { trace?: TraceStep[] }) | undefined {
   const contractAddressLower = contractAddress.toLowerCase();
+  const shouldResolve = !!contractAddress && formattedTokenId !== 'skip';
   const tokenIdHex = toTokenIdHex(formattedTokenId);
   const imageCacheKey = `lsp8:${contractAddressLower}:${tokenIdHex}`;
 
@@ -165,21 +192,22 @@ function useLsp8ChildImage({
 
   // Kick off API fetch once useNft settles
   useEffect(() => {
-    if (nftLoadingRaw) return;
+    if (!shouldResolve || nftLoadingRaw) return;
     const nftMetadata = nftData as any;
     const nftImages = nftMetadata ? flattenImages(nftMetadata) : [];
-    if (nftImages.some(isUsableIpfs)) return;
+    if (nftImages.some(isUsableImageUrl)) return;
     apiFetch(imageCacheKey, () => fetchTokenImage(contractAddressLower, tokenIdHex), isPopupContext);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nftLoadingRaw, imageCacheKey]);
+  }, [nftLoadingRaw, imageCacheKey, shouldResolve]);
 
+  if (!shouldResolve) return { url: '', scheme: 'none', trace: [] };
   if (nftLoadingRaw) return undefined; // waiting for useNft hook
 
   const nftMetadata = nftData as any;
 
   // Priority chain levels
   const nftImages = nftMetadata ? flattenImages(nftMetadata) : [];
-  const usableImageUrl = nftImages.find(isUsableIpfs);
+  const usableImageUrl = nftImages.find(isUsableImageUrl);
 
   const cachedImageUrl = apiCacheGet(imageCacheKey) ?? undefined;
   const isCacheSettled = apiCacheHas(imageCacheKey);
@@ -309,7 +337,7 @@ function useLsp8CollectionImage({
 }: {
   collectionAddress: string;
   collectionIcon?: ResolvedIcon;
-}): { icon: ResolvedIcon | undefined } {
+}): { icon: ResolvedIcon | undefined; isLoading: boolean } {
   const imageCacheKey = `lsp8coll:${collectionAddress.toLowerCase()}`;
 
   const [, setTick] = useState(0);
@@ -323,9 +351,11 @@ function useLsp8CollectionImage({
   const cachedImageUrl = apiCacheGet(imageCacheKey) ?? undefined;
   const isCacheSettled = apiCacheHas(imageCacheKey);
 
-  if (collectionIcon?.url) return { icon: collectionIcon };
-  if (isCacheSettled && cachedImageUrl) return { icon: { url: cachedImageUrl, scheme: 'api.Asset' } };
-  return { icon: undefined };
+  if (collectionIcon?.url) return { icon: collectionIcon, isLoading: false };
+  if (isCacheSettled && cachedImageUrl) {
+    return { icon: { url: cachedImageUrl, scheme: 'api.Asset' }, isLoading: false };
+  }
+  return { icon: undefined, isLoading: !isCacheSettled };
 }
 
 // ─── TokenListItem ─────────────────────────────────────────
@@ -346,9 +376,17 @@ function TokenListItem({ item, onSelect }: {
     <div
       className="list-item"
       style={styles.item}
+      role="button"
+      tabIndex={0}
+      aria-label={`Open ${item.name} details`}
       onClick={(e) => onSelect('token', item.contractAddress, undefined, e)}
+      onKeyDown={(e) => activateRowFromKeyboard(e, () => onSelect('token', item.contractAddress))}
     >
-      {renderIcon(displayIcon, item.symbol || item.name || 'T')}
+      {renderIcon(
+        displayIcon,
+        item.symbol || item.name || 'T',
+        resolved === undefined || resolved?.scheme === 'loading',
+      )}
       <div style={styles.itemInfo}>
         <span style={styles.itemName}>{item.name}</span>
         <span style={styles.itemSymbol}>{item.symbol}</span>
@@ -375,9 +413,17 @@ function Lsp7SingleNftListItem({ item, onSelect }: {
     <div
       className="list-item"
       style={styles.item}
+      role="button"
+      tabIndex={0}
+      aria-label={`Open ${item.name} details`}
       onClick={(e) => onSelect('nft', item.contractAddress, item.tokenId, e)}
+      onKeyDown={(e) => activateRowFromKeyboard(e, () => onSelect('nft', item.contractAddress, item.tokenId))}
     >
-      {renderIcon(displayIcon, item.name || item.symbol || 'N')}
+      {renderIcon(
+        displayIcon,
+        item.name || item.symbol || 'N',
+        resolved === undefined || resolved?.scheme === 'loading',
+      )}
       <div style={styles.itemInfo}>
         <span style={styles.itemName}>{item.name}</span>
         <span style={styles.itemSymbol}>{item.amount ? `${item.amount} ${item.symbol}` : item.symbol}</span>
@@ -406,9 +452,17 @@ function NftChildItem({ entry, collectionFallbackIcon, handleSelectAsset }: {
     <div
       className="list-item"
       style={{ ...styles.item, marginLeft: '12px' }}
+      role="button"
+      tabIndex={0}
+      aria-label={`Open ${entry.name} details`}
       onClick={(e) => handleSelectAsset('nft', entry.contractAddress, entry.tokenId, e)}
+      onKeyDown={(e) => activateRowFromKeyboard(e, () => handleSelectAsset('nft', entry.contractAddress, entry.tokenId))}
     >
-      {renderIcon(displayIcon, entry.name || entry.symbol || 'N')}
+      {renderIcon(
+        displayIcon,
+        entry.name || entry.symbol || 'N',
+        resolved === undefined || resolved?.scheme === 'loading',
+      )}
       <div style={styles.itemInfo}>
         <span style={styles.itemName}>{entry.name}</span>
         <span style={styles.itemSymbol}>{entry.tokenId ? `#${shortenId(entry.tokenId, 16)}` : entry.symbol}</span>
@@ -438,7 +492,11 @@ function NftSectionHeaderRow({ label, protocol, count, sectionKey, isExpanded, o
     <div style={{ background: 'var(--color-surface-nft-header)', height: '32px', display: 'flex', alignItems: 'center' }}>
       <div
         style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', cursor: 'pointer', userSelect: 'none', opacity: 1, transition: `opacity var(--transition-fast)`, width: '100%' }}
+        role="button"
+        tabIndex={0}
+        aria-expanded={isExpanded}
         onClick={() => onToggle(sectionKey)}
+        onKeyDown={(e) => activateRowFromKeyboard(e, () => onToggle(sectionKey))}
         onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.opacity = '0.7'; }}
         onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.opacity = '1'; }}
       >
@@ -456,9 +514,9 @@ function NftSectionHeaderRow({ label, protocol, count, sectionKey, isExpanded, o
 function NftCollectionHeaderRow({ coll, isExpanded, onToggle, renderIcon }: {
   coll: NftCollEntry; isExpanded: boolean;
   onToggle: (id: string) => void;
-  renderIcon: (icon: ResolvedIcon | undefined, fallback: string) => React.ReactNode;
+  renderIcon: (icon: ResolvedIcon | undefined, fallback: string, isLoading?: boolean) => React.ReactNode;
 }) {
-  const { icon: collIcon } = useLsp8CollectionImage({
+  const { icon: collIcon, isLoading: isCollectionIconLoading } = useLsp8CollectionImage({
     collectionAddress: coll.id,
     collectionIcon: coll.collectionIcon,
   });
@@ -466,9 +524,14 @@ function NftCollectionHeaderRow({ coll, isExpanded, onToggle, renderIcon }: {
     <div
       className="list-item"
       style={{ ...styles.item, fontWeight: 600 }}
+      role="button"
+      tabIndex={0}
+      aria-expanded={isExpanded}
+      aria-label={`Toggle ${coll.name}`}
       onClick={() => onToggle(coll.id)}
+      onKeyDown={(e) => activateRowFromKeyboard(e, () => onToggle(coll.id))}
     >
-      {renderIcon(collIcon, coll.symbol || coll.name || 'C')}
+      {renderIcon(collIcon, coll.symbol || coll.name || 'C', isCollectionIconLoading)}
       <div style={styles.itemInfo}>
         <span style={styles.itemName}>{coll.name}</span>
         <span style={styles.itemSymbol}>{coll.count} NFTs</span>
@@ -486,7 +549,7 @@ function AssetListSkeleton({ rows = 5 }: { rows?: number }) {
     <>
       {Array.from({ length: rows }, (_, i) => (
         <div key={i} style={styles.item}>
-          <div className="skim" style={styles.itemIcon} />
+          <div style={styles.itemIconPending}><ImagePending /></div>
           <div style={styles.itemInfo}>
             <div className="skim" style={{ width: 110, height: 13, borderRadius: 4 }} />
             <div className="skim" style={{ width: 64, height: 11, borderRadius: 4 }} />
@@ -657,12 +720,6 @@ export function AssetList({ address, active = true }: AssetListProps) {
       return n;
     });
   }, []);
-
-  useEffect(() => {
-    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') handleClosePopup(); };
-    document.addEventListener('keydown', h);
-    return () => document.removeEventListener('keydown', h);
-  }, [handleClosePopup]);
 
   // ─── Token items ─────────────────────────────────────────
   // tokenItems: 全件（検索対象・総数表示用）
@@ -869,7 +926,11 @@ export function AssetList({ address, active = true }: AssetListProps) {
               key={item.id}
               className="list-item"
               style={styles.item}
+              role="button"
+              tabIndex={0}
+              aria-label="Open LYX details"
               onClick={(e) => handleSelectAsset('token' as const, item.contractAddress, undefined, e)}
+              onKeyDown={(e) => activateRowFromKeyboard(e, () => handleSelectAsset('token', item.contractAddress))}
             >
               {renderIcon(undefined, 'LYX')}
               <div style={styles.itemInfo}>
@@ -903,8 +964,9 @@ export function AssetList({ address, active = true }: AssetListProps) {
   // isTokenPopup:   useAssetImage({ type: 'token' })
   // isLsp7NftPopup: useAssetImage({ type: 'lsp7nft' })
 
+  const isNativeLyx    = selectedAsset?.type === 'token' && selectedAsset.address === '';
   const isLsp8Popup    = selectedAsset?.type === 'nft' && !!selectedAsset?.formattedTokenId;
-  const isTokenPopup   = selectedAsset?.type === 'token';
+  const isTokenPopup   = selectedAsset?.type === 'token' && !isNativeLyx;
   const isLsp7NftPopup = selectedAsset?.type === 'nft' && !selectedAsset?.formattedTokenId;
 
   const popupContractAddress = selectedAsset?.address ?? '';
@@ -952,6 +1014,7 @@ export function AssetList({ address, active = true }: AssetListProps) {
 
   // Unified popup image — picks the active hook result
   const popupImage = useMemo((): { url: string | null; scheme: string } => {
+    if (isNativeLyx) return { url: null, scheme: 'none' };
     const activeResolved = isLsp8Popup ? popupLsp8Image
       : isTokenPopup   ? popupTokenImage
       : isLsp7NftPopup ? popupLsp7NftImage
@@ -959,19 +1022,25 @@ export function AssetList({ address, active = true }: AssetListProps) {
     if (activeResolved === undefined) return { url: null, scheme: 'loading' };
     if (activeResolved.url) return { url: activeResolved.url, scheme: activeResolved.scheme };
     return { url: null, scheme: 'none' };
-  }, [isLsp8Popup, isTokenPopup, isLsp7NftPopup, popupLsp8Image, popupTokenImage, popupLsp7NftImage]);
+  }, [isNativeLyx, isLsp8Popup, isTokenPopup, isLsp7NftPopup, popupLsp8Image, popupTokenImage, popupLsp7NftImage]);
 
-  // Debug panel: shown always in dev, opt-in in prod via ?debug=1.
+  // Image diagnostics are always available and collapsed by default.
   const debugEnabled = isDebugEnabled();
   const popupDebugSteps = useMemo((): TraceStep[] | undefined => {
     if (!debugEnabled) return undefined;
+    if (isNativeLyx) {
+      return [
+        traceSkip('1. native asset metadata', 'LYX has no contract image metadata'),
+        traceMiss('final: no image URL', 'native asset placeholder'),
+      ];
+    }
     const activeResolved = isLsp8Popup ? popupLsp8Image
       : isTokenPopup   ? popupTokenImage
       : isLsp7NftPopup ? popupLsp7NftImage
       : undefined;
-    if (!activeResolved) return undefined;
-    return activeResolved.trace;
-  }, [debugEnabled, isLsp8Popup, isTokenPopup, isLsp7NftPopup, popupLsp8Image, popupTokenImage, popupLsp7NftImage]);
+    if (!activeResolved) return [traceWait('image source resolution')];
+    return activeResolved.trace ?? [traceWait('image resolution trace')];
+  }, [debugEnabled, isNativeLyx, isLsp8Popup, isTokenPopup, isLsp7NftPopup, popupLsp8Image, popupTokenImage, popupLsp7NftImage]);
 
   // useNft for popup text metadata (name, description, links, attributes)
   // Image resolution is handled separately by useLsp8ChildImage above.
@@ -985,13 +1054,22 @@ export function AssetList({ address, active = true }: AssetListProps) {
   const popupDa = selectedOwnedData?.digitalAsset;
   // On-demand metadata (description/links/attributes/supply) — fetched per
   // selection instead of included in the whole-list query (Phase 2).
-  const popupMeta = usePopupAssetMeta(selectedAsset?.address ?? null);
-  const popupDisplayName = isLsp8Popup
-    ? ((popupNftData as any)?.name || (selectedOwnedData as any)?.nft?.name || popupMeta?.name || popupDa?.name || 'Unknown') : (popupMeta?.name || popupDa?.name || 'Unknown');
-  const popupDisplaySymbol = isLsp8Popup
-    ? `#${(popupNftData as any)?.formattedTokenId || (selectedOwnedData as any)?.nft?.formattedTokenId || selectedAsset?.formattedTokenId || '?'}` : (popupMeta?.symbol || popupDa?.symbol || '');
-  const popupDesc = isLsp8Popup
-    ? ((popupNftData as any)?.description || (selectedOwnedData as any)?.nft?.description) : (popupMeta?.description ?? (popupDa as any)?.description ?? null);
+  const popupMeta = usePopupAssetMeta(isNativeLyx ? null : selectedAsset?.address ?? null);
+  const popupDisplayName = isNativeLyx
+    ? 'LYX'
+    : isLsp8Popup
+      ? ((popupNftData as any)?.name || (selectedOwnedData as any)?.nft?.name || popupMeta?.name || popupDa?.name || 'Unknown')
+      : (popupMeta?.name || popupDa?.name || 'Unknown');
+  const popupDisplaySymbol = isNativeLyx
+    ? 'LUKSO native token'
+    : isLsp8Popup
+      ? `#${(popupNftData as any)?.formattedTokenId || (selectedOwnedData as any)?.nft?.formattedTokenId || selectedAsset?.formattedTokenId || '?'}`
+      : (popupMeta?.symbol || popupDa?.symbol || '');
+  const popupDesc = isNativeLyx
+    ? 'Native currency of the LUKSO network.'
+    : isLsp8Popup
+      ? ((popupNftData as any)?.description || (selectedOwnedData as any)?.nft?.description)
+      : (popupMeta?.description ?? (popupDa as any)?.description ?? null);
   const popupLinks = !isLsp8Popup
     ? (popupMeta?.links.length ? popupMeta.links : ((popupDa as any)?.links || []))
     : (((popupNftData as any)?.links || (selectedOwnedData as any)?.nft?.links) || []);
@@ -1002,6 +1080,9 @@ export function AssetList({ address, active = true }: AssetListProps) {
   // ── Assemble Popup props ─────────────────────────────────
 
   const popupStats = useMemo((): { label: string; value: string }[] => {
+    if (isNativeLyx) {
+      return [{ label: 'Balance', value: `${parseFloat(lyxBalance || '0').toFixed(4)} LYX` }];
+    }
     if (!selectedOwnedData) return [];
     const da = popupDa as any;
     const totalSupply = popupMeta?.totalSupply ?? da?.totalSupply;
@@ -1020,7 +1101,7 @@ export function AssetList({ address, active = true }: AssetListProps) {
       { label: 'Decimals', value: decimals != null ? String(decimals) : '-' },
     ];
     return [];
-  }, [isTokenPopup, isLsp7NftPopup, selectedOwnedData, popupDa, popupMeta]);
+  }, [isNativeLyx, lyxBalance, isTokenPopup, isLsp7NftPopup, selectedOwnedData, popupDa, popupMeta]);
 
   // Normalize links to PopupLink format (Asset uses "name", LSP3 profile uses "title")
   const popupNormalizedLinks = useMemo((): PopupLink[] => {
@@ -1105,13 +1186,13 @@ export function AssetList({ address, active = true }: AssetListProps) {
           </div>
         </div>
       )}
-      {selectedAsset && selectedOwnedData && (
+      {selectedAsset && (selectedOwnedData || isNativeLyx) && (
         <Popup
           onClose={handleClosePopup}
           image={popupImage}
           placeholderInitials={(popupDisplayName || popupDisplaySymbol || 'A').charAt(0)}
           name={popupDisplayName === 'Unknown' && (isLsp8Popup ? popupNftLoading : popupMeta === undefined) ? undefined : popupDisplayName}
-          isLoading={isLsp8Popup ? popupNftLoading : popupMeta === undefined}
+          isLoading={isNativeLyx ? false : isLsp8Popup ? popupNftLoading : popupMeta === undefined}
           subLabel={popupDisplaySymbol}
           description={popupDesc}
           stats={popupStats}
@@ -1253,6 +1334,18 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: 'hidden',
     flexShrink: 0,
     background: 'var(--accent-soft)',
+  },
+  itemIconPending: {
+    width: 'var(--avatar-size-sm)',
+    height: 'var(--avatar-size-sm)',
+    borderRadius: 'var(--radius-full)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: '1rem',
+    overflow: 'hidden',
+    flexShrink: 0,
+    background: 'var(--color-state-resolving)',
   },
   itemIconWithImg: {
     width: 'var(--avatar-size-sm)',

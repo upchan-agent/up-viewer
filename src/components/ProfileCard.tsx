@@ -5,7 +5,7 @@ import { useProfile } from '@lsp-indexer/react';
 import { toGatewayUrl } from '@/lib/utils';
 import { LUKSO_EXPLORER_URL } from '@/lib/constants';
 import { useResolvedProfileImage } from '@/lib/profile-image-cache';
-import { ErrorImage } from '@/components/ErrorImage';
+import { ErrorImage, ImagePending } from '@/components/ErrorImage';
 
 // ─── Layout stability ────────────────────────────────────────
 // 接続状態の遷移（Detecting → Connected / Viewing / Connect button）で
@@ -115,10 +115,14 @@ export function ProfileCard({
           <ErrorImage
             src={backgroundImageUrl}
             style={styles.bannerImg}
-            onLoad={(e) => { (e.target as HTMLImageElement).style.opacity = '1'; }}
+            loading="eager"
+            fetchPriority="high"
+            pendingFallback={<ImagePending />}
           />
         ) : (
-          <div style={styles.bannerFallback} />
+          <div style={styles.bannerFallback}>
+            {isLoading && activeAddress ? <ImagePending /> : null}
+          </div>
         )}
         <div style={styles.bannerFade} />
       </div>
@@ -149,12 +153,17 @@ export function ProfileCard({
 
       <div style={styles.identity}>
         {isLoading && activeAddress ? (
-          <div className="skim" style={styles.avatar} />
+          <div style={{ ...styles.avatar, background: 'var(--color-state-resolving)', display: 'grid', placeItems: 'center' }}>
+            <ImagePending />
+          </div>
         ) : profileImageUrl ? (
           <ErrorImage
             src={profileImageUrl}
             alt={name}
             style={styles.avatar}
+            loading="eager"
+            fetchPriority="high"
+            pendingFallback={<ImagePending />}
             fallback={<div style={styles.avatarFallback}>{initials}</div>}
           />
         ) : (
@@ -180,6 +189,7 @@ export function ProfileCard({
 const styles: { [key: string]: React.CSSProperties } = {
   root: {
     position: 'relative',
+    isolation: 'isolate',
     flexShrink: 0,
     overflow: 'visible',
   },
@@ -187,7 +197,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     position: 'relative',
     height: 96,
     overflow: 'hidden',
-    background: '#c5cedb',
+    background: 'var(--color-state-resolving)',
     zIndex: 0,
   },
   bannerImg: {
@@ -196,13 +206,13 @@ const styles: { [key: string]: React.CSSProperties } = {
     objectFit: 'cover',
     objectPosition: 'center',
     display: 'block',
-    opacity: 0,
-    transition: 'opacity var(--transition-normal)',
   },
   bannerFallback: {
     width: '100%',
     height: '100%',
-    background: '#c5cedb',
+    background: 'var(--color-state-resolving)',
+    display: 'grid',
+    placeItems: 'center',
   },
   bannerFade: {
     position: 'absolute',
@@ -212,6 +222,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     height: 24,
     background: 'linear-gradient(to bottom, transparent, var(--paper))',
     pointerEvents: 'none',
+    zIndex: 1,
   },
   bannerBar: {
     position: 'absolute',
@@ -271,7 +282,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     alignItems: 'flex-end',
     padding: '0 16px 8px',
     position: 'relative',
-    zIndex: 1,
+    zIndex: 2,
   },
   avatar: {
     width: 'var(--avatar-size-lg)',
@@ -279,6 +290,8 @@ const styles: { [key: string]: React.CSSProperties } = {
     borderRadius: '50%',
     border: '3px solid var(--paper)',
     objectFit: 'cover',
+    position: 'relative',
+    zIndex: 2,
     flexShrink: 0,
     marginTop: -20,
     background: 'var(--accent-soft)',
@@ -288,6 +301,8 @@ const styles: { [key: string]: React.CSSProperties } = {
     height: 'var(--avatar-size-lg)',
     borderRadius: '50%',
     border: '3px solid var(--paper)',
+    position: 'relative',
+    zIndex: 2,
     flexShrink: 0,
     marginTop: -20,
     background: 'var(--accent-soft)',

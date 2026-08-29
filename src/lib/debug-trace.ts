@@ -33,29 +33,17 @@ export const traceHit = (label: string, url?: string): TraceStep =>
 export const traceMiss = (label: string, detail?: string): TraceStep =>
   ({ label, status: 'miss', ...(detail ? { detail } : {}) });
 
-export const traceWait = (label: string): TraceStep => ({ label, status: 'wait' });
+export const traceWait = (label: string, detail?: string): TraceStep =>
+  ({ label, status: 'wait', ...(detail ? { detail } : {}) });
 
 export const traceSkip = (label: string, why = 'higher priority won'): TraceStep =>
   ({ label, status: 'skip', detail: why });
 
-/** True when the debug panel should be rendered: always in dev,
- *  opt-in in production via ?debug=1.
- *
- *  The result is latched on first read: page.tsx rewrites the URL
- *  (router.replace '?view=...') which drops the debug param, so later
- *  reads must not depend on location.search. */
-let _debugLatched: boolean | undefined;
-
+/**
+ * Image diagnostics are a first-class viewer feature. The panel stays collapsed
+ * by default, so keeping it available in production has no layout cost and
+ * avoids environment-dependent UAT behaviour.
+ */
 export function isDebugEnabled(): boolean {
-  if (typeof window === 'undefined') return false;
-  if (_debugLatched !== undefined) return _debugLatched;
-  _debugLatched = process.env.NODE_ENV === 'development'
-    || (() => {
-      try {
-        return new URLSearchParams(window.location.search).has('debug');
-      } catch {
-        return false;
-      }
-    })();
-  return _debugLatched;
+  return true;
 }

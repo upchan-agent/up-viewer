@@ -216,25 +216,35 @@ export function useResolvedProfileImage({
   indexerImageUrl,
   indexerBackgroundImageUrl,
   indexerAvatarUrl,
+  resolveBackground = true,
 }: {
   address: string;
   indexerImageUrl?: string;
   indexerBackgroundImageUrl?: string;
   indexerAvatarUrl?: string;
+  /**
+   * List rows only need the profile image. Setting this to false prevents an
+   * ERC725/RPC fallback fetch solely to fill an unused background image.
+   */
+  resolveBackground?: boolean;
 }): ResolvedProfileImage | undefined {
   const key = address.toLowerCase();
 
   const [, setTick] = useState(0);
   useEffect(() => subscribeProfileCache(key, () => setTick(t => t + 1)), [key]);
 
-  const hasAnyIndexerImage = !!(indexerImageUrl || indexerBackgroundImageUrl);
+  const hasRequiredIndexerData = !!indexerImageUrl && (!resolveBackground || !!indexerBackgroundImageUrl);
   const cached = _profileCache.get(key);
   const isCacheSettled = cached !== undefined;
 
   useEffect(() => {
-    if (isCacheSettled) return; // settled (positive or within retry window)
+    if (!key || hasRequiredIndexerData || isCacheSettled) return;
     fetchProfileCache(key);
-  }, [key, hasAnyIndexerImage, isCacheSettled]);
+  }, [key, hasRequiredIndexerData, isCacheSettled]);
+
+  if (!key) {
+    return { profileImageUrl: null, backgroundImageUrl: null, scheme: 'none' };
+  }
 
   const resolved = resolveFromSources({
     indexerImageUrl,

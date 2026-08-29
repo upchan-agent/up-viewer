@@ -2,25 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { envioQuery } from '@/lib/envio';
-
-// ─── ErrorImage（エラー時のみフォールバック表示）──────────
-
-function ErrorImage({ src, alt, style, fallback }: {
-  src: string; alt?: string; style?: React.CSSProperties;
-  fallback?: React.ReactNode;
-}) {
-  const [failed, setFailed] = useState(false);
-
-  if (failed) return <>{fallback ?? null}</>;
-  return (
-    <img
-      src={src}
-      alt={alt ?? ''}
-      style={style}
-      onError={() => setFailed(true)}
-    />
-  );
-}
+import { ErrorImage, ImagePending } from '@/components/ErrorImage';
 
 const GQL_QUERY = `
   query MyQuery($id: String!) {
@@ -188,6 +170,9 @@ export function ProfileSearch({ onSelect, onCancel }: ProfileSearchProps) {
                   <ErrorImage
                     src={r.profileImages[0].src}
                     style={styles.resultAvatarImg}
+                    loading="lazy"
+                    fetchPriority="low"
+                    pendingFallback={<ImagePending />}
                     fallback={<span style={styles.resultAvatarFallback}>{(r.name || r.fullName || '?').charAt(0)}</span>}
                   />
                 ) : (

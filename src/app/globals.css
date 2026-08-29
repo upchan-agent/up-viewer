@@ -159,6 +159,31 @@ body {
   to   { opacity: 1; }
 }
 
+/* ─── Static image pending state ───────────────────────────── */
+/* Image transport uses a static marker instead of shimmer or fade. The marker
+   distinguishes "still loading" from the final no-image fallback without
+   adding motion or delaying interaction. */
+
+.uv-image-pending {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1em;
+  color: var(--mute);
+  font-family: var(--font-stack-sans);
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1;
+  pointer-events: none;
+  user-select: none;
+}
+
+.uv-image-pending svg {
+  display: block;
+  width: 15px;
+  height: 15px;
+}
+
 /* ─── Skeleton shimmer utility ───────────────────────────── */
 
 .skim {

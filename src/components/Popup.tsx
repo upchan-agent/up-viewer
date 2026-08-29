@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect, useCallback, memo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, memo } from 'react';
 import { createPortal } from 'react-dom';
-import { ErrorImage } from '@/components/ErrorImage';
-import { TRACE_GLYPH, type TraceStep } from '@/lib/debug-trace';
+import { ErrorImage, ImagePending } from '@/components/ErrorImage';
+import type { ImageTransportStatus } from '@/components/ErrorImage';
+import { TRACE_GLYPH, traceHit, traceMiss, traceSkip, traceWait, type TraceStep } from '@/lib/debug-trace';
 
 // ─── Props ────────────────────────────────────────────────────
 //
@@ -122,16 +123,93 @@ export const Popup = memo(function Popup({
   debugSteps,
 }: PopupProps) {
   const [debugOpen, setDebugOpen] = useState(false);
+  const [zoomOpen, setZoomOpen] = useState(false);
+  const zoomTriggerRef = useRef<HTMLButtonElement>(null);
+  const [primaryTransport, setPrimaryTransport] = useState<{
+    src: string;
+    status: ImageTransportStatus;
+  } | null>(null);
+  const [backgroundTransport, setBackgroundTransport] = useState<{
+    src: string;
+    status: ImageTransportStatus;
+  } | null>(null);
 
-  // Escape key to close
+  const handlePrimaryTransport = useCallback((status: ImageTransportStatus, src: string) => {
+    setPrimaryTransport(current => current?.src === src && current.status === status
+      ? current
+      : { src, status });
+  }, []);
+  const handleBackgroundTransport = useCallback((status: ImageTransportStatus, src: string) => {
+    setBackgroundTransport(current => current?.src === src && current.status === status
+      ? current
+      : { src, status });
+  }, []);
+
+  const canZoom = !!image?.url
+    && primaryTransport?.src === image.url
+    && primaryTransport.status === 'loaded';
+
+  const handleOpenZoom = useCallback(() => {
+    if (canZoom) setZoomOpen(true);
+  }, [canZoom]);
+
+  const handleCloseZoom = useCallback(() => {
+    setZoomOpen(false);
+    requestAnimationFrame(() => zoomTriggerRef.current?.focus());
+  }, []);
+
+  // Escape closes the topmost layer first: lightbox, then details popup.
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (zoomOpen) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        handleCloseZoom();
+      } else {
+        onClose();
+      }
+    };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [onClose]);
+  }, [handleCloseZoom, onClose, zoomOpen]);
 
-  // Reset debug panel when popup content changes
-  useEffect(() => { setDebugOpen(false); }, [name, subLabel]);
+  // Reset transient panels when popup content changes
+  useEffect(() => {
+    setDebugOpen(false);
+    setZoomOpen(false);
+  }, [name, subLabel]);
+
+  const renderedDebugSteps = useMemo((): TraceStep[] | undefined => {
+    if (debugSteps === undefined) return undefined;
+    const steps = [...debugSteps];
+
+    if (image?.url) {
+      const status = primaryTransport?.src === image.url ? primaryTransport.status : 'loading';
+      if (status === 'loaded') steps.push(traceHit('transport.primary: decoded', image.url));
+      else if (status === 'failed') steps.push(traceMiss('transport.primary: load failed', image.url));
+      else if (status === 'timeout') steps.push(traceMiss('transport.primary: timeout after 20s', image.url));
+      else steps.push(traceWait('transport.primary: loading', image.url));
+    } else if (image?.scheme === 'loading') {
+      steps.push(traceWait('transport.primary: waiting for URL'));
+    } else {
+      steps.push(traceSkip('transport.primary', 'no resolved image URL'));
+    }
+
+    if (useBannerLayout) {
+      if (backgroundImage) {
+        const status = backgroundTransport?.src === backgroundImage ? backgroundTransport.status : 'loading';
+        if (status === 'loaded') steps.push(traceHit('transport.background: decoded', backgroundImage));
+        else if (status === 'failed') steps.push(traceMiss('transport.background: load failed', backgroundImage));
+        else if (status === 'timeout') steps.push(traceMiss('transport.background: timeout after 20s', backgroundImage));
+        else steps.push(traceWait('transport.background: loading', backgroundImage));
+      } else {
+        steps.push(traceSkip('transport.background', 'no resolved background URL'));
+      }
+    }
+
+    return steps;
+  }, [backgroundImage, backgroundTransport, debugSteps, image, primaryTransport, useBannerLayout]);
 
   const handleDebugToggle = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -140,20 +218,50 @@ export const Popup = memo(function Popup({
 
   // Banner avatar fallback (timeout時 / ローディング中 / 画像なし)
   // Banner avatar content — what to show inside the circular avatar
-  const avatarContent = image?.url
-    ? <ErrorImage src={image.url} style={styles.bannerAvatar} fallback={<div style={styles.bannerAvatarPlaceholder} />} />
-    : <div style={styles.bannerAvatarPlaceholder} />;
+  const avatarContent = image?.scheme === 'loading'
+    ? <div style={{ ...styles.bannerAvatarPlaceholder, display: 'grid', placeItems: 'center' }}><ImagePending /></div>
+    : image?.url
+      ? (
+        <button
+          ref={zoomTriggerRef}
+          type="button"
+          aria-label={`Enlarge ${name || 'profile'} image`}
+          title="Enlarge image"
+          disabled={!canZoom}
+          onClick={handleOpenZoom}
+          style={{ ...styles.imageZoomTrigger, cursor: canZoom ? 'zoom-in' : 'default' }}
+        >
+          <ErrorImage
+            src={image.url}
+            style={styles.bannerAvatar}
+            loading="eager"
+            fetchPriority="high"
+            pendingFallback={<ImagePending />}
+            onStatusChange={handlePrimaryTransport}
+            fallback={<div style={styles.bannerAvatarPlaceholder} />}
+          />
+        </button>
+      )
+      : <div style={styles.bannerAvatarPlaceholder} />;
 
   return createPortal(
-    <div style={styles.overlay} onClick={onClose}>
+    <>
+    <div style={styles.overlay} onClick={onClose} aria-hidden={zoomOpen || undefined}>
       {/* uv-scroll: スクロールバーの有無でコンテンツ幅が変わり、
           読み込み前後で左に詰まるのを防ぐ（gutter 常時予約）。
           overlay は createPortal で document.body 直下に描画するため、
           タブ切り替え（opacity 合成レイヤー）の影響で黒い残像が残らない。 */}
-      <div className="uv-scroll" style={styles.popup} onClick={(e) => e.stopPropagation()}>
+      <div
+        className="uv-scroll"
+        style={styles.popup}
+        role="dialog"
+        aria-modal="true"
+        aria-label={name ? `${name} details` : 'Details'}
+        onClick={(e) => e.stopPropagation()}
+      >
 
         {/* Close button — always on top */}
-        <button style={styles.closeButton} onClick={onClose}>×</button>
+        <button autoFocus aria-label="Close details" style={styles.closeButton} onClick={onClose}>×</button>
 
         {/* ── Image area ──────────────────────────────────────
             useBannerLayout: always banner+avatar (Social).
@@ -165,19 +273,22 @@ export const Popup = memo(function Popup({
           <div style={styles.bannerWrapper}>
             <div style={{
               ...styles.bannerBackground,
-              background: backgroundImage ? 'transparent' : 'var(--color-state-resolving)',
+              background: 'var(--color-state-resolving)',
             }}>
               {backgroundImage && (
                 <ErrorImage
                   src={backgroundImage}
                   style={styles.bannerBgImg}
-                  onLoad={(e) => { (e.target as HTMLImageElement).style.opacity = '1'; }}
+                  loading="eager"
+                  fetchPriority="high"
+                  pendingFallback={<ImagePending />}
+                  onStatusChange={handleBackgroundTransport}
                 />
               )}
             </div>
             <div style={{
               ...styles.bannerAvatarWrapper,
-              background: 'var(--color-border-default)',
+              background: 'var(--color-state-resolving)',
             }}>
               {avatarContent}
             </div>
@@ -185,9 +296,29 @@ export const Popup = memo(function Popup({
         ) : (
           <div style={styles.imageWrapper}>
             {image?.url
-              ? <ErrorImage src={image.url} style={styles.image} fallback={<span style={styles.placeholderMark}>{(placeholderInitials || name || '·').charAt(0)}</span>} />
-              : isLoading
-                ? <div className="skim" style={styles.imageSkim} />
+              ? (
+                <button
+                  ref={zoomTriggerRef}
+                  type="button"
+                  aria-label={`Enlarge ${name || 'asset'} image`}
+                  title="Enlarge image"
+                  disabled={!canZoom}
+                  onClick={handleOpenZoom}
+                  style={{ ...styles.imageZoomTrigger, cursor: canZoom ? 'zoom-in' : 'default' }}
+                >
+                  <ErrorImage
+                    src={image.url}
+                    style={styles.image}
+                    loading="eager"
+                    fetchPriority="high"
+                    pendingFallback={<ImagePending />}
+                    onStatusChange={handlePrimaryTransport}
+                    fallback={<span style={styles.placeholderMark}>{(placeholderInitials || name || '·').charAt(0)}</span>}
+                  />
+                </button>
+              )
+              : isLoading || image?.scheme === 'loading'
+                ? <ImagePending />
                 : <span style={styles.placeholderMark}>{(placeholderInitials || name || '·').charAt(0)}</span>}
           </div>
         )}
@@ -294,17 +425,17 @@ export const Popup = memo(function Popup({
         )}
 
         {/* ── Debug ───────────────────────────────────────── */}
-        {(debugSteps !== undefined || debugText !== undefined) && (
+        {(renderedDebugSteps !== undefined || debugText !== undefined) && (
           <div style={debugStyles.container}>
             <button
               style={debugStyles.toggle}
               onClick={handleDebugToggle}
             >
-              🔍 Debug: Image Resolution {debugOpen ? '▲' : '▼'}
+              Debug: Image Resolution {debugOpen ? '▲' : '▼'}
             </button>
-            {debugOpen && debugSteps !== undefined && (
+            {debugOpen && renderedDebugSteps !== undefined && (
               <div style={debugStyles.content}>
-                {debugSteps.map((step, i) => (
+                {renderedDebugSteps.map((step, i) => (
                   <div key={i} style={debugStyles.stepRow}>
                     <span style={debugStyles.stepGlyph} data-status={step.status}>
                       {TRACE_GLYPH[step.status]}
@@ -320,14 +451,50 @@ export const Popup = memo(function Popup({
                 ))}
               </div>
             )}
-            {debugOpen && debugSteps === undefined && debugText !== undefined && (
+            {debugOpen && renderedDebugSteps === undefined && debugText !== undefined && (
               <div style={debugStyles.content}>{debugText}</div>
             )}
           </div>
         )}
 
       </div>
-    </div>,
+    </div>
+    {zoomOpen && image?.url && (
+      <div
+        style={styles.lightboxOverlay}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${name || 'Image'} enlarged image`}
+        onClick={(event) => {
+          if (event.target === event.currentTarget) handleCloseZoom();
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== 'Tab') return;
+          event.preventDefault();
+          event.currentTarget.querySelector<HTMLButtonElement>('button')?.focus();
+        }}
+      >
+        <button
+          type="button"
+          autoFocus
+          aria-label="Close enlarged image"
+          style={styles.lightboxClose}
+          onClick={handleCloseZoom}
+        >
+          ×
+        </button>
+        <img
+          src={image.url}
+          alt={name ? `${name} enlarged` : 'Enlarged image'}
+          style={styles.lightboxImage}
+          loading="eager"
+          decoding="async"
+          draggable={false}
+          onClick={(event) => event.stopPropagation()}
+        />
+      </div>
+    )}
+    </>,
     document.body,
   );
 });
@@ -355,13 +522,73 @@ const styles: Record<string, React.CSSProperties> = {
     height: '70vh',     // 固定高さでコンテンツロード時のサイズシフトを防ぐ
     overflowY: 'auto', overflowX: 'hidden',
     position: 'relative', padding: '12px',
+    isolation: 'isolate',
     animation: 'popupIn 0.2s ease', transformOrigin: 'center',
     boxSizing: 'border-box',
   },
   closeButton: {
     position: 'absolute', top: '12px', right: '12px',
     background: 'none', border: 'none', fontSize: '1.5rem',
-    cursor: 'pointer', color: 'var(--color-text-muted)', lineHeight: 1, zIndex: 2,
+    cursor: 'pointer', color: 'var(--color-text-muted)', lineHeight: 1, zIndex: 3,
+  },
+
+  imageZoomTrigger: {
+    width: '100%',
+    height: '100%',
+    padding: 0,
+    border: 'none',
+    borderRadius: 'inherit',
+    background: 'var(--color-state-resolving)',
+    display: 'block',
+    minWidth: 0,
+    minHeight: 0,
+    boxSizing: 'border-box',
+    overflow: 'hidden',
+    appearance: 'none',
+    opacity: 1,
+  },
+
+  lightboxOverlay: {
+    position: 'fixed',
+    inset: 0,
+    zIndex: 10000,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '56px 16px 24px',
+    boxSizing: 'border-box',
+    background: 'rgba(7, 10, 16, 0.92)',
+    cursor: 'zoom-out',
+  },
+  lightboxClose: {
+    position: 'fixed',
+    top: 14,
+    right: 14,
+    width: 34,
+    height: 34,
+    border: '1px solid rgba(255, 255, 255, 0.22)',
+    borderRadius: 'var(--radius-full)',
+    background: 'rgba(20, 25, 35, 0.78)',
+    color: '#fff',
+    fontSize: 22,
+    lineHeight: 1,
+    display: 'grid',
+    placeItems: 'center',
+    padding: 0,
+    cursor: 'pointer',
+  },
+  lightboxImage: {
+    display: 'block',
+    width: 'auto',
+    height: 'auto',
+    maxWidth: 'calc(100vw - 32px)',
+    maxHeight: 'calc(100dvh - 80px)',
+    objectFit: 'contain',
+    borderRadius: 'var(--radius-md)',
+    boxShadow: '0 18px 60px rgba(0, 0, 0, 0.45)',
+    cursor: 'default',
+    touchAction: 'pinch-zoom',
+    userSelect: 'none',
   },
 
   // 標準画像エリア（Asset）— 固定高さでレイアウトシフトを防ぐ
@@ -372,16 +599,15 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex', justifyContent: 'center', alignItems: 'center',
     background: 'var(--color-state-resolving)', flexShrink: 0,
   },
-  image: { maxWidth: '100%', maxHeight: '160px', objectFit: 'contain' },
-  imageSkim: { width: '100%', height: '100%' },
+  image: { width: '100%', height: '100%', objectFit: 'contain' },
   nameSkim: { width: 120, height: 22, borderRadius: 'var(--radius-xs)' },
   descSkim: { width: '100%', height: 40, borderRadius: 'var(--radius-sm)', marginBottom: 'var(--space-1)', flexShrink: 0 },
-  loadingText: { color: 'var(--color-text-faint)', fontSize: 'var(--text-md)' },
   placeholderMark: { color: 'var(--accent)', fontSize: '1.4rem', fontWeight: 700 },
 
   // バナー＋アバターレイアウト（Social）
   bannerWrapper: {
     width: '100%', marginBottom: 'var(--space-1)', position: 'relative',
+    isolation: 'isolate',
     borderRadius: 'var(--radius-xl)', overflow: 'visible',
   },
   // バナー背景（画像なし時）— トークン統一
@@ -389,11 +615,11 @@ const styles: Record<string, React.CSSProperties> = {
     width: '100%', height: '100px',
     borderRadius: 'var(--radius-xl)',
     overflow: 'hidden', position: 'relative',
+    zIndex: 0,
   },
   bannerBgImg: {
     width: '100%', height: '100%',
     objectFit: 'cover', objectPosition: 'center',
-    opacity: 0, transition: `opacity var(--transition-normal)`,
     display: 'block',
   },
   bannerAvatarWrapper: {
@@ -401,13 +627,15 @@ const styles: Record<string, React.CSSProperties> = {
     width: '64px', height: '64px',
     borderRadius: 'var(--radius-full)',
     border: '3px solid var(--color-surface-input)',
+    boxSizing: 'border-box',
     overflow: 'hidden',
     background: 'var(--color-surface-muted)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     boxShadow: 'var(--shadow-avatar)',
+    zIndex: 2,
   },
-  bannerAvatar: { width: '100%', height: '100%', objectFit: 'cover' },
-  bannerAvatarPlaceholder: { width: '100%', height: '100%', borderRadius: 'var(--radius-full)', background: 'var(--color-state-resolving)', border: '2px solid var(--color-state-empty)' },
+  bannerAvatar: { width: '100%', height: '100%', objectFit: 'cover', borderRadius: 'inherit' },
+  bannerAvatarPlaceholder: { width: '100%', height: '100%', borderRadius: 'inherit', background: 'var(--color-state-resolving)' },
 
   // ヘッダー — name/subLabel の有無で高さが変わらないよう固定行高を予約。
   // name 行: 23px (18px font), subLabel 行: 17px (12px font)。
